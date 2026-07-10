@@ -43,6 +43,9 @@ import subprocess
 import sys
 import time
 from collections import Counter
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+import _stdio  # noqa: E402,F401 — forces UTF-8 stdout/stderr on import
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ── CONFIGURE ───────────────────────────────────────────────────────────────

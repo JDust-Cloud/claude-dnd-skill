@@ -28,7 +28,7 @@ def _narration_directive():
     """A bracketed length directive the DM honors this turn, or '' if unset."""
     try:
         if os.path.exists(NARRATION_TARGET):
-            n = open(NARRATION_TARGET).read().strip()
+            n = open(NARRATION_TARGET, encoding="utf-8").read().strip()
             if n.isdigit() and int(n) > 0:
                 return (f"[[Narration length for this turn: aim for ~{n} words. "
                         f"The table set this — keep it concise; do not pad.]]")
@@ -42,7 +42,7 @@ def _roll_directives():
     try:
         if os.path.exists(ROLL_PREFS):
             import json
-            with open(ROLL_PREFS) as f:
+            with open(ROLL_PREFS, encoding="utf-8") as f:
                 prefs = json.load(f)
             lines = [f"[[{c} roll mode: {m}]]" for c, m in prefs.items()
                      if m in ("auto", "players")]
@@ -54,7 +54,7 @@ def _roll_directives():
 
 try:
     if os.path.exists(QUEUE_FILE):
-        with open(QUEUE_FILE) as f:
+        with open(QUEUE_FILE, encoding="utf-8") as f:
             content = f.read().strip()
         os.remove(QUEUE_FILE)
         if content:

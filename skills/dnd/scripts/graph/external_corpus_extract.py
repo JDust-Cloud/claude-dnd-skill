@@ -26,6 +26,9 @@ import sys
 import time
 from collections import Counter
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+import _stdio  # noqa: E402,F401 — forces UTF-8 stdout/stderr on import
+
 EXTRACTION_SYSTEM = """You extract relationship verbs from D&D narrative text for verb-frequency research.
 
 For each post, identify all sentences that describe a relationship or action between two named entities (people, factions, places, characters, NPCs). For each such sentence, output the VERB (lemmatized to base form) along with whether the relationship is concrete (both entities are clearly named) or abstract (one or both entities are pronouns/concepts).

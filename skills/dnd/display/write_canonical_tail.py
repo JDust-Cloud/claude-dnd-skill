@@ -28,8 +28,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
+import _stdio  # noqa: E402,F401 — forces UTF-8 stdout/stderr on import
 
 
 def _resolve_campaign_root() -> Path:
@@ -50,7 +54,7 @@ def main() -> int:
     src.add_argument("--file", help="Path to a file containing the JSON list")
     args = p.parse_args()
 
-    raw = args.json if args.json is not None else open(args.file).read()
+    raw = args.json if args.json is not None else open(args.file, encoding="utf-8").read()
     try:
         entries = json.loads(raw)
     except json.JSONDecodeError as e:
@@ -84,7 +88,7 @@ def main() -> int:
 
     # Atomic write: temp file + rename
     tmp = target.with_suffix(".json.tmp")
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cleaned, f, indent=2)
         f.flush()
         try:

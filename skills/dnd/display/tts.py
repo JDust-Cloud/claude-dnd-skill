@@ -14,10 +14,14 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+import _stdio  # noqa: E402,F401 — forces UTF-8 stdout/stderr on import
 
 # ── Configuration ───────────────────────────────────────────────────────────
 

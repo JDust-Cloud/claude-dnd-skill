@@ -41,6 +41,9 @@ import urllib.parse
 import urllib.request
 from typing import Optional
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+import _stdio  # noqa: E402,F401 — forces UTF-8 stdout/stderr on import
+
 USER_AGENT = "CampaignGraphResearch/0.1 (research; verb-extraction; contact=local)"
 RATE_LIMIT_SEC = 2.0          # minimum delay between requests
 TIMEOUT = 30
