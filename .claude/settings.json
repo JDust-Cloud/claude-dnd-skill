@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 *dice.py*)",
+      "Bash(python3 *combat.py*)",
+      "Bash(PYTHONIOENCODING=utf-8 python3 *combat.py*)",
+      "Bash(python3 *tracker.py*)",
+      "Bash(python3 *send.py*)",
+      "Bash(python3 *push_stats.py*)",
+      "Bash(python3 *check_input.py*)",
+      "Bash(python3 *autorun_wait.py*)"
+    ]
+  }
+}
