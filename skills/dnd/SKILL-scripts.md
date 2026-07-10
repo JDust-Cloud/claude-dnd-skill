@@ -126,6 +126,12 @@ Pushes character and combat stats to the sidebar. Players merged by name; partia
 
 ```bash
 # Full stats push (on /dm:dnd load — use --replace-players to clear stale characters):
+# IMPORTANT: if any pushed characters are DM-run allies (not tied to a live
+# human player at the table), immediately follow this with --autorun-threshold
+# set to the actual human-player count (see "N-player threshold" below). The
+# auto-fire default falls back to total character count, so with e.g. 4 party
+# characters and 1 human player, a solo "ready" never reaches the threshold
+# and staged input never auto-promotes.
 python3 ${CLAUDE_SKILL_DIR}/display/push_stats.py --replace-players --json '{
   "players": [{
     "name": "Flerb", "race": "Tiefling", "class": "Fighter", "level": 1, "background": "Soldier",
@@ -225,6 +231,10 @@ python3 ${CLAUDE_SKILL_DIR}/display/push_stats.py --autorun-waiting true --autor
 python3 ${CLAUDE_SKILL_DIR}/display/push_stats.py --autorun-waiting false   # hide after turn resolves
 
 # N-player threshold — auto-fire when N players (not all) are ready:
+# Set this at campaign load whenever the party includes DM-run allies —
+# the default (no override) is total character count, not human-player
+# count, so a solo human running 3 DM-controlled allies would otherwise
+# never see staged input auto-fire. Set N = number of live human players.
 python3 ${CLAUDE_SKILL_DIR}/display/push_stats.py --autorun-threshold 2   # fire when 2 ready
 python3 ${CLAUDE_SKILL_DIR}/display/push_stats.py --autorun-threshold 0   # reset to player count
 ```
