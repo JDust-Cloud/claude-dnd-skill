@@ -30,6 +30,8 @@ import pathlib
 import shutil
 import sys
 
+import _stdio  # noqa: F401 — forces UTF-8 stdout/stderr on import
+
 _DEFAULT_ROOT = pathlib.Path("~/.claude/dnd").expanduser()
 
 
@@ -174,7 +176,7 @@ def campaign_ruleset(name: str) -> str:
     if not state.exists():
         return DEFAULT_RULESET
     try:
-        text = state.read_text(errors="replace")
+        text = state.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return DEFAULT_RULESET
     m = _RULESET_PAT.search(text)

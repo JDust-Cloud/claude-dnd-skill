@@ -103,7 +103,7 @@ def load_posts(corpus_dir: pathlib.Path, top_n: int) -> list:
     for md in corpus_dir.rglob("*.md"):
         if md.name == "_summary.json":
             continue
-        text = md.read_text()
+        text = md.read_text(encoding="utf-8")
         words = len(text.split())
         # Extract post_id from header
         m = re.search(r"\*\*Post ID:\*\*\s+(\S+)", text)
@@ -201,7 +201,7 @@ def main():
     }
 
     out_path = args.out.expanduser()
-    out_path.write_text(json.dumps(output, indent=2))
+    out_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
     print(f"[done] {out_path}")
 
     # Summary to stdout

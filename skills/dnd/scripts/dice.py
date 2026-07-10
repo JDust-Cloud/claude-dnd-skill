@@ -38,6 +38,8 @@ import time
 import urllib.request
 import urllib.error
 
+import _stdio  # noqa: F401 — forces UTF-8 stdout/stderr on import
+
 
 # --------------------------------------------------------------------------
 # Local-random fallback (unchanged behavior from the original dice.py)

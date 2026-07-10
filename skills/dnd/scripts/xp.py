@@ -192,7 +192,7 @@ def _find_char_path(campaign: str, char_name: str) -> pathlib.Path:
 
 def _read_char_state(path: pathlib.Path) -> tuple[int, int]:
     """Read current XP and level from a character file. Returns (xp, level)."""
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     xp_m   = re.search(r"\*\*XP:\*\*\s*(\d+)", text)
     level_m = re.search(r"\*\*Level:\*\*\s*(\d+)", text)
     xp    = int(xp_m.group(1))    if xp_m    else 0
@@ -202,7 +202,7 @@ def _read_char_state(path: pathlib.Path) -> tuple[int, int]:
 
 def _write_char_xp(path: pathlib.Path, new_xp: int, current_level: int) -> bool:
     """Update XP field in character file. Returns True if level-up threshold crossed."""
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     next_lvl = _next_level_xp(current_level)
     leveled = new_xp >= next_lvl
 
@@ -220,7 +220,7 @@ def _write_char_xp(path: pathlib.Path, new_xp: int, current_level: int) -> bool:
         text,
         count=1,
     )
-    path.write_text(updated)
+    path.write_text(updated, encoding="utf-8")
     return leveled
 
 

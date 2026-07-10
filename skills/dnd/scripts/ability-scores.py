@@ -18,6 +18,8 @@ Point Buy cost table (D&D 5e standard):
 import random
 import sys
 
+import _stdio  # noqa: F401 — forces UTF-8 stdout/stderr on import
+
 
 STATS = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
 

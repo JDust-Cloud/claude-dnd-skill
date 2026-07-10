@@ -27,6 +27,8 @@ import random
 import sys
 import re
 
+import _stdio  # noqa: F401 — forces UTF-8 stdout/stderr on import
+
 
 def roll(n, sides):
     return [random.randint(1, sides) for _ in range(n)]

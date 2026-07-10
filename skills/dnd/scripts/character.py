@@ -18,6 +18,8 @@ Usage:
 """
 
 import sys
+
+import _stdio  # noqa: F401 — forces UTF-8 stdout/stderr on import
 import re
 
 

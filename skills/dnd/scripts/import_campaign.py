@@ -28,6 +28,8 @@ import re
 import subprocess
 import textwrap
 
+import _stdio  # noqa: F401 — forces UTF-8 stdout/stderr on import
+
 CHUNK_WORDS = 4000  # words per chunk for large sources
 
 
