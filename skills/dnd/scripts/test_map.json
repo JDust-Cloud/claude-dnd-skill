@@ -1,0 +1,9 @@
+{
+  "grid": { "width": 8, "height": 8 },
+  "walls": [],
+  "difficult": [[3, 3], [4, 3]],
+  "tokens": {
+    "Flerb":  { "square": [1, 1], "side": "pc",    "speed_ft": 30, "reach_ft": 5, "ac": 15, "reaction_available": true },
+    "Goblin": { "square": [1, 2], "side": "enemy", "speed_ft": 30, "reach_ft": 5, "reaction_available": true }
+  }
+}
