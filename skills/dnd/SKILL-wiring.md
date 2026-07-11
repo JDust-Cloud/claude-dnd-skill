@@ -129,7 +129,9 @@ Every gridded combat has a live map file:
 `~/.claude/dnd/campaigns/<name>/map.json` (grid, walls, difficult, tokens —
 and `zones`, §3). It is created at combat start with a token for every
 combatant (`side`, `speed_ft`, `reach_ft`; `atk_bonus`/`dmg` overrides for
-anything not in the SRD). The combat blob still owns HP/AC/initiative;
+anything not in the SRD — INCLUDING every PC, whose melee numbers come off
+their sheet at combat start, so PC opportunity attacks resolve inside the
+move.py pipe instead of by hand). The combat blob still owns HP/AC/initiative;
 **map.json owns space, and `move.py` is its only writer.** Join key = name.
 
 **Turn opening — every combat turn, no exceptions, in this order:**
@@ -159,9 +161,15 @@ anything not in the SRD). The combat blob still owns HP/AC/initiative;
    Distances are squares × 5 ft (Chebyshev). When a distance is
    load-bearing — an OA window, a spell range, a zone edge — compute it with
    the §3 one-liner; never eyeball a number a decision hangs on.
-4. **Then the actor acts.**
+4. **Then the actor acts — gated by pilot (§5-c).** If the acting token is a
+   PC with a human pilot, STOP here: the frame is the question. No movement,
+   no resource spend, no roll of theirs resolves until that player's declared
+   action arrives (under autorun, the wait loop carries it back). DM-piloted
+   tokens — designated DM-run allies and monsters — act immediately.
 
-A combat turn that opens without steps 1–3 is a defect **(§2-a)**.
+A combat turn that opens without steps 1–3 is a defect **(§2-a)**; resolving
+any part of a human-piloted PC's turn without their input is a §5 defect
+regardless of how disposable the PC looks.
 
 **Every position change goes through `move.py --write`** — PC, ally, monster,
 and forced movement (push, pull, grapple-drag). Movement that exists only in
@@ -186,10 +194,21 @@ committing whether a path provokes:
     `--write` (that run's dice stand — the dry-run's dice are void). On no,
     set that PC token's `reaction_available` to `false` in map.json, run the
     move with `--write`, then restore it to `true` in the same beat —
-    declining is not spending.
+    declining is not spending. The ask goes to that PC's designated pilot
+    (§5-c) and ONLY the pilot answers it — the DM answering its own dry-run
+    question is a §5-b breach, however tactically obvious the answer.
+
+**Death cleanup (§2-c).** In the same beat a combatant drops to 0 HP or
+otherwise leaves the fight: set its map.json token's `reaction_available` to
+`false`, and remove the token at the end of that turn. map.json carries no
+alive/dead state, so a dead token left in place still fires opportunity
+attacks (found live: a 0-HP baaz took an OA at the sdq-test fight). This
+manual guard stands until move.py grows its per-token OA-suppression flag
+(build list).
 
 *Kills: defect #15 (six-enemy fight, zero spatial frame); step 1 kills #5
-(staged input never consumed in solo auto).*
+(staged input never consumed in solo auto); §2-c kills sdq-test defect #19
+(dead-token OA).*
 
 ---
 
@@ -308,8 +327,20 @@ covers OA reactions ONLY — every other reaction is asked per event. §2 define
 the mechanical dance for each value. This is what preserves the measured
 latency win without silently spending player resources.
 
-**Exempt: DM-run allies.** Characters the DM runs (the party's NPC allies)
-are the DM's to play — fully, including their resources and tactics.
+**Pilot designation (§5-c).** Every PC has exactly one pilot — a named human
+or the DM — recorded in `state.md → ## Session Flags` as
+`pilots: Kest = Jeff, Levna = DM`, set at PC creation or session setup and
+NEVER inferred. "Throwaway," "test," or "disposable" is not a designation;
+an undesignated PC's decision point is a hard stop-and-ask, not a license
+(the sdq-test fight produced three violations from this one gap). If a
+mid-session instruction contradicts the stored config, the DM echoes the
+config in one table-channel line — *"standing config: I run Grosh/Thora/
+Aessa — say the word to take one over"* — instead of silently resolving the
+conflict in either direction.
+
+**Exempt: DM-run allies.** Characters designated `= DM` under §5-c (the
+party's NPC allies) are the DM's to play — fully, including their resources
+and tactics.
 `roll_mode` law in SKILL.md sits above this section and is unchanged: under
 `players`, PC dice are never rolled by the DM, period.
 
@@ -338,6 +369,13 @@ rules-talk; when in doubt, cut it.
 Need to convey a mechanic mid-dialogue? Drop to a table-channel line, then
 return to fiction. **Test (§6-a): read the character's line aloud — if it
 teaches the listener a rule, it's a defect.**
+
+**The wall also holds at load (§6-b).** Recaps, scene-sets, and any
+player-facing prose speak only facts the players have learned in play.
+Fields marked `(secret)` / DM-only in npcs-full.md, world.md, or the arc
+never surface in fiction until revealed at the table — the sdq-test
+session-0 recap narrating a betrayal no PC had discovered is the defect
+shape this kills.
 
 *Kills: defect #10 (Thora naming death saves and "Preserve Life" as mechanics
 in speech).*
@@ -381,29 +419,23 @@ beat; prose never carries a balance.**
 | Token positions | `map.json` (`move.py` only) | tactical frame; Foundry (Stage 3+) |
 | Conditions, concentration, timed effects, death saves | `tracker.json` (`tracker.py` only) | `--stat-condition-*`, `--stat-concentrate`, `--effect-*` |
 | HP in combat | combat blob (`combat.py` / DM) | `--stat-hp`; character file at save |
-| Spendable pools — ki, rage uses, spell slots, hit dice, Second Wind | `state.md → ## Party` — one structured pool line per PC; the LIVE ledger | `--stat-slot-*`, `push_stats.py` partial flags; each sheet's `## Resources` rewritten at save (§8-e) |
+| Spendable pools — ki, rage uses, spell slots, hit dice, Second Wind | the character file's `## Resources` block — one structured line per pool (`Ki: 2/3`) | `--stat-slot-*`, `push_stats.py` partial flags |
 | XP | `xp.py` (writes the character file) | `xp.py`'s own push + `--xp-award` block |
 | World clock | `calendar.py` | `--world-time` |
 
 **The spend flow** (any pool, every time): player consents (§5) → edit the
-PC's pool line in `state.md → ## Party` → same-beat display push → narrate.
-Three moves, one beat.
+`## Resources` line → same-beat display push → narrate. Three moves, one beat.
 
-**Bootstrapping:** if `state.md → ## Party` lacks a structured pool line for a
-PC, create it at session load — values only, one line per PC (`Ren: Ki 2/3 ·
-Rage 0/3 · HD 3/3 (d8)`), seeded from that sheet's `## Resources` block (build
-THAT first from sheet prose if it's missing, §8-a, then treat the sheet as
-read-only until save). No parenthetical history in the block — ~~"(rested to
-full, then spent 1)"~~ is prose smuggling a story into a ledger. From that
-load onward the party block is the live ledger; sheets are not edited during
-play (HP in combat still lives in the combat blob per the table above).
+**Bootstrapping:** if a character file has no `## Resources` block yet, create
+it at session load — one line per pool (`Ki: 2/3`, `Rage: 1/3`, `Hit Dice:
+3/3 (d8)`), moving each current value IN and deleting every prose copy it
+replaces (§8-a). The block exists from that load onward; the sheets stop
+being novels about resources and start being ledgers.
 
 **Prose copies are banned (§8-a).** No current-value or active-state claim
 exists anywhere except the home and its pushes. A sheet's feature text
 describes RULES (*"costs 1 ki"*), never balances (~~"2/3 remaining"~~).
-`state.md → ## Party` is the pool ledger (the table above); OUTSIDE that
-block, state.md never carries a pool value or balance — recent-events prose,
-NPC notes, and flags stay number-free. Narration may
+`state.md` summarizes the flags it owns, never pool values. Narration may
 gesture (*"winded, down to her last tricks"*), never number.
 
 **NPCs are tracked entities too (§8-b).** Any state change on an NPC the
@@ -431,16 +463,10 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/session_recap.py diff --campaign $CAMP --no-
 python3 ${CLAUDE_SKILL_DIR}/scripts/tracker.py -c $CAMP status
 ```
 
-**Sheets are save-time projections.** At save, in order: (1) rewrite the
-`state.md → ## Party` block whole from combat close and the tracker (HP
-included); (2) rewrite each sheet's `## Resources` FROM the party block; (3)
-run the two commands above and read every sheet's `## Resources` and effect
-state against their outputs; fix mismatches BEFORE writing the save. The save
-confirmation states either **"drift check: clean"** or lists what was
-corrected. All four sheets rotted at the first measured session's close-out
-because nothing forced this look; the party block sat a full fight stale at
-the session-2 probe because it wasn't yet the owner. One ledger, projected
-twice, checked once.
+Read every sheet's `## Resources` and effect state against those two outputs;
+fix mismatches BEFORE writing the save; the save confirmation states either
+**"drift check: clean"** or lists what was corrected. All four sheets rotted
+last session because nothing forced this look.
 
 *Kills: defects #17 (ki triplicated and diverged; four stale sheets at
 close-out), #7 (Scritch's frozen sidebar), #13 (immortal effect chips),
@@ -496,8 +522,18 @@ time, never at the table.
 | 16 | Auto-spent reaction on OA | §5-b + §2 |
 | 17 | Ki in three places, all diverging | §8 + §8-a + §8-e |
 
+## Appendix 2 — Defect → Rule map (2026-07-11 sdq-test harvest)
+
+| # | Defect (short name) | Killed by |
+|---|---|---|
+| 18 | Session-0 recap narrated secret state | §6-b |
+| 19 | Dead token fired an OA | §2-c (manual guard; move.py flag on build list) |
+| 20 | DM piloted an undesignated PC (moves, attacks, Second Wind) | §5-c + §2 step 4 gate |
+| 21 | DM answered its own `oa_consent: ask` question | §5-b + §2 ask-bullet sentence |
+| 22 | PC tokens outside the move.py OA pipe | §2 map-creation override rule |
+
 **Later (explicitly not now):** `dice.py` chip-header flag; `move.py`
-per-token OA suppression flag (retires §2's reaction-toggle dance); zones
-inside the engine (Stage 5 "zones v2"); session-tail purge tool; `xp.py`
-append-only award log.
+per-token OA suppression flag (retires §2's reaction-toggle dance — and the
+§2-c manual guard); zones inside the engine (Stage 5 "zones v2");
+session-tail purge tool; `xp.py` append-only award log.
 

@@ -76,6 +76,8 @@ Full step-by-step procedures for all `/dm:dnd` slash commands. Load this file at
 0. **Pick the campaign if none was named.** If `<campaign-name>` was supplied (or the player clearly named one), use it. Otherwise `ls` the campaigns dir (`~/.claude/dnd/campaigns/` or `$DND_CAMPAIGN_ROOT/campaigns/`) and **call `AskUserQuestion`**: *"Which campaign?"* with the existing campaign names as options (most-recently-played first — sort by `state.md` mtime). The player can pick "Other" to type a name. If there are no campaigns, tell them and offer `/dm:dnd new`.
 1. **Session setup — call `AskUserQuestion`** with **three questions** (not typed y/n prompts). Q3 is the standing OA consent (SKILL-wiring.md §5-b) — same wording, options, and defaults as `/dm:dnd new` step 1: write `oa_consent: auto|ask` to `state.md → ## Session Flags`, per-PC when several humans play, `ask` on dismissal.
 
+   **Pilot check (SKILL-wiring.md §5-c) — immediately after the three questions:** read `pilots:` from `## Session Flags`. If it's missing, or any PC in `characters/` lacks an entry, ask one question — *"Who runs whom this session?"* — and write `pilots: <PC> = <player name or DM>` covering every PC before play begins. A PC created mid-session gets its pilot recorded at creation. Never infer a pilot from context, test framing, or party size.
+
    **Q1 *"Display & input mode?"***
    - `No display` → continue without display.
    - `Display (local)` → `bash ${CLAUDE_SKILL_DIR}/display/start-display.sh`, print URL, set `_display_running = true`.
