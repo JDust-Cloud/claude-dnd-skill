@@ -4979,7 +4979,7 @@ function renderReplayBatch(items) {
         _appendInlineSegments(p, _mdParse(line));
         block.appendChild(p);
       });
-      _addTtsBar(block);
+      _addTtsBar(block, false);   // replay: play button only, never auto-narrate
       textContent.appendChild(block);
     }
   });
@@ -5087,7 +5087,7 @@ function renderReplay(text) {
     _appendInlineSegments(p, _mdParse(line));
     block.appendChild(p);
   });
-  _addTtsBar(block);
+  _addTtsBar(block, false);   // replay: play button only, never auto-narrate
   textContent.appendChild(block);
 
   // Add a divider after replay so live text starts fresh
@@ -6162,6 +6162,16 @@ let _ttsCtx = null;
 let _ttsActiveSource = null;
 let _ttsActivePlayBtn = null;
 
+// Serial playback queue (defect: two blocks' audio used to overlap — a block
+// whose fetch was still in flight had no source to stop, so racing responses
+// both called source.start()). Items play strictly in enqueue order; each
+// item's audio PREFETCHES at enqueue so the next block starts the moment the
+// current one ends. _ttsGen invalidates queued/in-flight work when the user
+// manually plays a block or stops playback.
+let _ttsGen = 0;
+const _ttsQueue = [];
+let _ttsPumping = false;
+
 function _getTtsCtx() {
   if (!_ttsCtx || _ttsCtx.state === 'closed') {
     _ttsCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -6194,32 +6204,67 @@ function _ttsExtractText(blockEl) {
   return (clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 2000);
 }
 
-async function _ttsPlayBlock(btn, blockEl) {
-  if (btn.classList.contains('tts-playing')) { _ttsStopActive(); return; }
-  _ttsStopActive();
+function _ttsFetchAudio(text) {
+  // Started at enqueue time — the prefetch. Errors are captured into a value
+  // so an unhandled rejection can't escape while the item waits in the queue.
+  return fetch('/tts', {
+    method: 'POST',
+    headers: _authHeaders(),
+    body: JSON.stringify({ text, voice: _ttsVoice }),
+  }).then(resp => {
+    if (!resp.ok) throw new Error('TTS ' + resp.status);
+    return resp.arrayBuffer();
+  }).then(pcm => {
+    if (!pcm.byteLength) throw new Error('TTS empty');
+    return pcm;
+  }).catch(err => ({ __ttsErr: err }));
+}
+
+function _ttsBtnIdle(btn) {
+  btn.innerHTML = _SVG_SPEAKER;
+  btn.classList.remove('tts-playing', 'tts-loading');
+  btn.setAttribute('aria-label', 'Listen to narration');
+}
+
+function _ttsBtnError(btn, err) {
+  const label = ((err && err.message) || 'ERR').slice(0, 12);
+  btn.textContent = label;
+  btn.classList.remove('tts-loading', 'tts-playing');
+  setTimeout(() => {
+    if (!btn.classList.contains('tts-playing') && !btn.classList.contains('tts-loading')) {
+      _ttsBtnIdle(btn);
+    }
+  }, 3000);
+}
+
+function _ttsEnqueue(btn, blockEl) {
   const text = _ttsExtractText(blockEl);
   if (!text) return;
-
-  const ctx = _getTtsCtx();
-  const resumeP = ctx.state !== 'running' ? ctx.resume() : Promise.resolve();
-
+  _ttsQueue.push({ btn, gen: _ttsGen, fetchP: _ttsFetchAudio(text) });
   btn.innerHTML = _SVG_SPIN;
   btn.classList.add('tts-loading');
-  btn.setAttribute('aria-label', 'Loading…');
+  btn.setAttribute('aria-label', 'Queued…');
+  _ttsPump();
+}
+
+async function _ttsPlayItem(item) {
+  const btn = item.btn;
+  const ctx = _getTtsCtx();
+  const resumeP = ctx.state !== 'running' ? ctx.resume() : Promise.resolve();
   _ttsActivePlayBtn = btn;
 
-  try {
-    const resp = await fetch('/tts', {
-      method: 'POST',
-      headers: _authHeaders(),
-      body: JSON.stringify({ text, voice: _ttsVoice }),
-    });
-    if (!resp.ok) throw new Error('TTS ' + resp.status);
-    const pcm = await resp.arrayBuffer();
-    if (!pcm.byteLength) throw new Error('TTS empty');
+  const pcm = await item.fetchP;
+  if (item.gen !== _ttsGen) { _ttsBtnIdle(btn); return; }   // invalidated mid-fetch
+  if (pcm && pcm.__ttsErr) {
+    if (_ttsActivePlayBtn === btn) _ttsActivePlayBtn = null;
+    _ttsBtnError(btn, pcm.__ttsErr);
+    return;                                                  // failed block: skip, keep the queue moving
+  }
 
+  try {
     await resumeP;
     if (ctx.state === 'suspended') await ctx.resume();
+    if (item.gen !== _ttsGen) { _ttsBtnIdle(btn); return; }  // invalidated mid-resume
 
     const int16 = new Int16Array(pcm);
     const audioBuffer = ctx.createBuffer(1, int16.length, 24000);
@@ -6236,33 +6281,50 @@ async function _ttsPlayBlock(btn, blockEl) {
     btn.setAttribute('aria-label', 'Stop narration');
     _ttsActiveSource = source;
 
-    source.onended = () => {
-      if (_ttsActiveSource === source) {
-        _ttsActiveSource = null;
-        if (_ttsActivePlayBtn === btn) {
-          btn.innerHTML = _SVG_SPEAKER;
-          btn.classList.remove('tts-playing');
-          btn.setAttribute('aria-label', 'Listen to narration');
-          _ttsActivePlayBtn = null;
-        }
-      }
-    };
-    source.start(0);
+    await new Promise(resolve => {
+      source.onended = resolve;
+      source.start(0);
+    });
+    if (_ttsActiveSource === source) _ttsActiveSource = null;
+    if (_ttsActivePlayBtn === btn) _ttsActivePlayBtn = null;
+    _ttsBtnIdle(btn);
   } catch (err) {
-    if (_ttsActivePlayBtn === btn) {
-      const label = (err.message || 'ERR').slice(0, 12);
-      btn.textContent = label;
-      btn.classList.remove('tts-loading', 'tts-playing');
-      setTimeout(() => {
-        if (!btn.classList.contains('tts-playing') && !btn.classList.contains('tts-loading')) {
-          btn.innerHTML = _SVG_SPEAKER;
-          btn.setAttribute('aria-label', 'Listen to narration');
-        }
-      }, 3000);
-      _ttsActivePlayBtn = null;
-    }
+    if (_ttsActivePlayBtn === btn) _ttsActivePlayBtn = null;
     _ttsActiveSource = null;
+    _ttsBtnError(btn, err);
   }
+}
+
+async function _ttsPump() {
+  if (_ttsPumping) return;
+  _ttsPumping = true;
+  try {
+    while (_ttsQueue.length) {
+      const item = _ttsQueue.shift();
+      if (item.gen !== _ttsGen) { _ttsBtnIdle(item.btn); continue; }  // stale — dropped
+      await _ttsPlayItem(item);
+    }
+  } finally {
+    _ttsPumping = false;
+    if (_ttsQueue.length) _ttsPump();   // items enqueued while we were winding down
+  }
+}
+
+function _ttsPlayBlock(btn, blockEl) {
+  // Manual click: stop toggles; play overrides — invalidate everything queued
+  // (auto-narrate catches up from the next live block) and play this one now.
+  if (btn.classList.contains('tts-playing')) {
+    _ttsGen++;
+    _ttsQueue.forEach(it => _ttsBtnIdle(it.btn));
+    _ttsQueue.length = 0;
+    _ttsStopActive();
+    return;
+  }
+  _ttsGen++;
+  _ttsQueue.forEach(it => _ttsBtnIdle(it.btn));
+  _ttsQueue.length = 0;
+  _ttsStopActive();
+  _ttsEnqueue(btn, blockEl);
 }
 
 function _ttsSaveVoice(voice) {
@@ -6309,7 +6371,10 @@ function _ttsBuildVoiceMenu() {
   return menu;
 }
 
-function _addTtsBar(blockEl) {
+function _addTtsBar(blockEl, allowAuto = true) {
+  // allowAuto=false for replayed/historical blocks: they get a play button but
+  // never self-narrate (a session load used to queue the whole replayed tail
+  // for reading — minutes of unwanted audio).
   if (!_TTS_AVAILABLE || !blockEl) return;
   if (blockEl.querySelector(':scope > .tts-bar')) return;  // already added
 
@@ -6341,9 +6406,10 @@ function _addTtsBar(blockEl) {
 
   blockEl.appendChild(bar);
 
-  if (_ttsAutoNarrate) {
-    // Defer one tick so the bar is in the DOM before triggering the click path
-    setTimeout(() => _ttsPlayBlock(playBtn, blockEl), 0);
+  if (_ttsAutoNarrate && allowAuto) {
+    // Defer one tick so the bar is in the DOM, then ENQUEUE (serial playback
+    // with prefetch) rather than firing the manual-override path.
+    setTimeout(() => _ttsEnqueue(playBtn, blockEl), 0);
   }
 }
 
