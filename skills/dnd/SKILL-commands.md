@@ -7,7 +7,7 @@ Full step-by-step procedures for all `/dm:dnd` slash commands. Load this file at
 ---
 
 ## `/dm:dnd new <campaign-name> [theme]`
-1. **Session setup — call `AskUserQuestion`** with **two questions**:
+1. **Session setup — call `AskUserQuestion`** with **three questions**:
 
    **Q1 *"Display & input mode?"***
    - `No display` → continue without display.
@@ -19,7 +19,13 @@ Full step-by-step procedures for all `/dm:dnd` slash commands. Load this file at
    - `Players roll their own` (default) → write `roll_mode: players` to `state.md → ## Session Flags`. You will call for each PC roll and wait — never auto-roll a PC.
    - `DM rolls everything openly` → write `roll_mode: auto`. You resolve PC rolls yourself with full math shown.
 
-   Default to `roll_mode: players` if the question is dismissed.
+   **Q3 *"Opportunity attacks?"*** — the standing consent (SKILL-wiring.md §5-b), asked once per session, never per event:
+   - `Auto-take them` (recommended for pace) → write `oa_consent: auto` to `state.md → ## Session Flags`. When an enemy provokes, the engine rolls the PC's opportunity attack without stopping play.
+   - `Ask me each time` → write `oa_consent: ask`. Provoking enemy moves get the dry-run-then-ask flow (SKILL-wiring.md §2).
+
+   With multiple human players, record per-PC (e.g. `oa_consent: Ren=auto, Piper=ask`). This flag covers opportunity-attack reactions ONLY — every other reaction is asked per event.
+
+   Default to `roll_mode: players` and `oa_consent: ask` if the questions are dismissed.
 2. **Ruleset selection (added 2026-05-08).** Ask: *"D&D 5e ruleset for this campaign? **2014** (SRD 5.1, default — full mechanics, classic Player's Handbook structure) or **2024** (SRD 5.2, weapon mastery + origin feats + background ASIs + revised exhaustion)?"* Default to `2014` if no answer or ambiguous. Write the chosen value to `state.md` header line as `**Ruleset:** 2014` or `**Ruleset:** 2024`.
 
    If 2024 was chosen: verify the dataset exists with `ls ${CLAUDE_SKILL_DIR}/data/dnd5e_srd_2024.json`. If missing, run `python3 ${CLAUDE_SKILL_DIR}/scripts/build_srd.py --ruleset 2024` (one-time, ~3 min). Until the dataset exists, lookup-based features will fall back to 2014.
@@ -68,7 +74,7 @@ Full step-by-step procedures for all `/dm:dnd` slash commands. Load this file at
 
 ## `/dm:dnd load <campaign-name>`
 0. **Pick the campaign if none was named.** If `<campaign-name>` was supplied (or the player clearly named one), use it. Otherwise `ls` the campaigns dir (`~/.claude/dnd/campaigns/` or `$DND_CAMPAIGN_ROOT/campaigns/`) and **call `AskUserQuestion`**: *"Which campaign?"* with the existing campaign names as options (most-recently-played first — sort by `state.md` mtime). The player can pick "Other" to type a name. If there are no campaigns, tell them and offer `/dm:dnd new`.
-1. **Session setup — call `AskUserQuestion`** with **two questions** (not typed y/n prompts):
+1. **Session setup — call `AskUserQuestion`** with **three questions** (not typed y/n prompts). Q3 is the standing OA consent (SKILL-wiring.md §5-b) — same wording, options, and defaults as `/dm:dnd new` step 1: write `oa_consent: auto|ask` to `state.md → ## Session Flags`, per-PC when several humans play, `ask` on dismissal.
 
    **Q1 *"Display & input mode?"***
    - `No display` → continue without display.
@@ -118,7 +124,7 @@ Full step-by-step procedures for all `/dm:dnd` slash commands. Load this file at
 
 3. **Read campaign ruleset** for this session: `python3 ${CLAUDE_SKILL_DIR}/scripts/paths.py campaign-ruleset <name>` (or import `campaign_ruleset` directly). Stash the result; pass `--ruleset <value>` to `lookup.py`, `build_supplemental.py`, and `combat.py` mastery calls so they route to the correct dataset. The display companion picks up the same value automatically via `push_stats.py --set-campaign`.
 
-4. Read SKILL-scripts.md (for script syntax this session)
+4. Read SKILL-scripts.md (script syntax) **and SKILL-wiring.md (table law — the dice pipe, tactical frame, zones, beats, agency, register, pacing, ledger all bind this session)**
 5. **Mark this campaign active** (for the autosave hook): write `{"name": "<campaign-name>"}` to `$(python3 ${CLAUDE_SKILL_DIR}/scripts/paths.py runtime-dir)/active-campaign.json`. This is what `autosave_checkpoint.py` reads to know which campaign to checkpoint; a stale marker is harmless. Then read state.md, world.md, npcs.md (index only), and all characters/*.md
    - **state.md contains `## DM Style Notes`** — read and internalize before narrating anything. These are table-specific calibration patterns that override default DM instincts.
    - **world.md:** Load in full — World Foundations, Three Truths, and factions inform narration and faction moves. Do NOT read `world-seeds.md` at load (generation artifact, not live reference).
@@ -228,6 +234,10 @@ Full step-by-step procedures for all `/dm:dnd` slash commands. Load this file at
 
    6. Re-run scene-context (now populated). Then proceed to step 6 (recap).
 
+7b. **Wiring boot (SKILL-wiring.md §9):**
+   - Snapshot the recap baseline: `python3 ${CLAUDE_SKILL_DIR}/scripts/session_recap.py snapshot --campaign <name>`
+   - If combat is plausible this session: verify `~/.claude/dnd/campaigns/<name>/map.json` exists, or note it will be created at first initiative (§2).
+   - Before a REAL game night: eyeball the replayed session tail for stale/test lines; if polluted, clean it before players see the screen (§9-5).
 8. Deliver one in-character paragraph recapping current situation — where the party is, what's at stake, what was last happening.
 9. Enter active DM mode — no `/dm:dnd` prefix needed from this point.
 
@@ -354,7 +364,14 @@ Campaign "<name>" created from <source title>.
 ---
 
 ## `/dm:dnd save`
-Write session events to session-log.md, update state.md (location, active quests, party HP/resources, recent events), update any characters/*.md that changed. Mirror each updated character to global roster (`~/.claude/dnd/characters/<name>.md`).
+**Step 0 — drift check (SKILL-wiring.md §8-e), mandatory before anything is written:**
+```bash
+python3 ${CLAUDE_SKILL_DIR}/scripts/session_recap.py diff --campaign <name> --no-roll
+python3 ${CLAUDE_SKILL_DIR}/scripts/tracker.py -c <name> status
+```
+Reconcile every character sheet's `## Resources` block and effect/condition state against those two outputs — fix mismatches FIRST. The save confirmation must state **"drift check: clean"** or list exactly what was corrected. Prose copies of balances stay banned everywhere (§8-a).
+
+Then: write session events to session-log.md, update state.md (location, active quests, party HP/resources, recent events), update any characters/*.md that changed. Mirror each updated character to global roster (`~/.claude/dnd/characters/<name>.md`) — **write-only mirror (§8-d): `mkdir -p` the directory first if missing; it is never read during play.**
 
 **Inspiration tracking:** On every save, record each PC's Inspiration state in `state.md → ## Current Situation → Party status`. Use explicit text: `Inspiration ✓` if held, omit or `No Inspiration` if not. Inspiration persists across sessions and is NOT cleared by long rests. Example: `Mara: HP 24/24. Inspiration ✓. Theo: HP 24/24.`
 

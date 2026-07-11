@@ -140,6 +140,8 @@ ${CLAUDE_SKILL_DIR}/                 ← the skill dir (plugin: <plugin>/skills/
   SKILL.md           ← core DM rules (this file)
   SKILL-scripts.md   ← all Python script syntax (load at session start)
   SKILL-commands.md  ← all /dm:dnd command procedures (load at session start)
+  SKILL-wiring.md    ← table law: dice pipe, tactical frame, zones, beats,
+                        player agency, register, pacing, ledger (load at session start)
   scripts/           ← dice.py, combat.py, character.py, tracker.py, calendar.py, lookup.py
   data/              ← bundled 5e SRD dataset (dnd5e_srd.json — no download needed; sync via /dm:dnd data sync)
   templates/         ← blank character-sheet.md, state.md, world.md, npcs.md, session-log.md
@@ -283,8 +285,16 @@ Roll handling is chosen at game start and stored as `roll_mode` in `state.md →
 
 **Per-player override:** a player can flip their own PC via the phone Settings → *Rolls* toggle. When that player has a queued action, `check_input.py` prepends a `[[<Char> roll mode: auto|players]]` directive — honor it for that character, overriding the campaign default. Precedence: **per-character directive > campaign `roll_mode`**.
 
+**Agency sits above rolling — SKILL-wiring.md §5 is law:** the DM never
+decides anything for a player's PC (resources — spending OR declining —
+dialogue, tactics); applicable abilities are surfaced BEFORE the roll they
+could alter (§5-a); the once-per-session `oa_consent` flag (§5-b) governs
+auto-resolved opportunity attacks and nothing else. DM-run allies exempt.
+
 **NPC/monster rolls are always yours** — resolve via `dice.py`, show math inline:
   `Goblin attacks: d20+4 = 17 vs AC 16 — hit! 1d6+2 = 5 piercing damage`
+  (that inline line is your terminal summary — the display CHIP is the piped
+  script output per SKILL-wiring.md §1, never a retyped line)
 
 ---
 
@@ -297,17 +307,21 @@ python3 ${CLAUDE_SKILL_DIR}/display/send.py --player <CharacterName> << 'DNDEND'
 DNDEND
 ```
 
-*All dice rolls* — send every roll with context using `--dice`:
+*All dice rolls* — **the dice pipe (SKILL-wiring.md §1) is law: a chip's digits
+are script output carried by a variable or pipe, never retyped.** The one
+pattern — capture once, read it, send the same bytes, in the SAME Bash call
+as the roll:
 ```bash
-# Hidden roll (silent in terminal, visible on display):
-ROLL=$(python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py d20+5 --silent)
-echo "Ethros the 19th — Insight (reading Septemous): d20+5 = $ROLL → [brief outcome]" | python3 ${CLAUDE_SKILL_DIR}/display/send.py --dice
-
-# Open roll:
-python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py d20+4 | python3 ${CLAUDE_SKILL_DIR}/display/send.py --dice
+OUT=$(python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py d20+5 --label "Ren - Insight")
+echo "$OUT"                              # you adjudicate from this variable
+{ echo "Ren - Insight (reading Scritch):"; echo "$OUT"; } \
+  | python3 ${CLAUDE_SKILL_DIR}/display/send.py --dice
 ```
-Format: `[Name] — [Skill] ([context]): d20+MOD = RESULT → [short outcome]`
-Send the roll line **immediately after rolling**, before writing the narration response.
+The header line carries name/skill/context and may not contain roll digits.
+Hidden rolls: capture `--silent` into a variable, adjudicate from it, narrate
+only the perceived result (§1). Attack, initiative, and OA chip templates:
+SKILL-wiring.md §1. The chip fires **the instant the roll lands** — never
+after the narration is composed.
 
 ⚠ **Heredoc gotcha:** The `<< 'DNDEND'` form (single-quoted terminator) **blocks variable expansion** — `${ROLL}` will be sent literally, not expanded. Use it for static narration, but for dice/anything with shell variables, **always use `echo`/`printf` piping** (as in the examples above) or an unquoted `<< DNDEND` heredoc. Mixing the two is the most common send-formatting bug.
 
@@ -319,19 +333,27 @@ DNDEND
 ```
 Brief NPC interjections within narration don't need a separate block.
 
-*DM narration* — **CRITICAL:** compose the complete narration first, then call `send.py` as the very last action. Never call `send.py` mid-response. The send must contain the **complete, unabridged text** — do not summarize or condense. **Bundle all stat changes (HP, spell slots, conditions, concentration, inventory) into this same send.py call** using `--stat-*` flags — no separate `push_stats.py` call needed for turn-resolution state:
+*DM narration* — **beats, not essays (SKILL-wiring.md §4).** The old
+compose-everything-then-send-last rule is REPEALED: dead air is the enemy, not
+speech length. Narrate in beats — one dramatic unit, 1–3 short paragraphs —
+and send each beat the moment it is written; the FIRST beat goes out before
+any long composition begins. Each beat is its complete text (never summarize)
+and is sent exactly ONCE — a correction is a new short beat, never a resend
+(§4-a). **Stat changes ride the beat in which they happened** via `--stat-*`
+flags on that beat's send — no separate `push_stats.py` call needed for
+turn-resolution state:
 ```bash
-# With stat changes (any HP/slot/condition that changed this turn):
+# Beat whose events changed stats:
 python3 ${CLAUDE_SKILL_DIR}/display/send.py \
   --stat-hp "Max of Thraxx:12:17" \
   --stat-slot-use "Ethros the 19th:1" \
   --stat-condition-add "Max of Thraxx:Poisoned" << 'DNDEND'
-[full narration text, word for word — every paragraph, closing prompt, roll outcome summaries]
+[this beat's narration, complete]
 DNDEND
 
-# Without stat changes (nothing changed this turn):
+# Beat with no stat changes:
 python3 ${CLAUDE_SKILL_DIR}/display/send.py << 'DNDEND'
-[full narration text]
+[this beat's narration, complete]
 DNDEND
 ```
 
@@ -350,25 +372,29 @@ DNDEND
 | `--effect-start` | `"NAME:SPELL:DURATION"` | Start timed effect — DURATION: `10r` / `60m` / `8h` / `indef`; append `:conc` if concentration |
 | `--effect-end` | `"NAME:SPELL"` | End effect (broken concentration, dispelled, player drops it) |
 
-**Batching rule — ONE Bash tool call per response, multiple typed sends inside it:**
+**Batching rule — one Bash tool call per BEAT (SKILL-wiring.md §4):**
 
 **CRITICAL: `send.py` calls MUST go through the explicit Bash tool — bash code blocks written in response text do not execute in Claude Code; they only display as text. Every display sync invocation requires an actual Bash tool call.**
 
-Multiple Bash tool calls = visible `⏺ Bash(...)` blocks fragmenting the CLI. Use one Bash tool call, with multiple `send.py` invocations inside it. **Never** combine all text into one `send.py` with no flag — that loses all styled distinctions.
+Multiple Bash calls per response are **expected** — one per beat, and a roll's
+chip fires in the same call that rolled it (§1). Within one beat's call, batch
+that beat's typed sends together. **Never** combine everything into one
+`send.py` with no flag — that loses all styled distinctions.
 
-**Correct pattern:**
+**One beat's call, correct pattern:**
 ```bash
-# 1. Player action
+# 1. Player action (echo intent before resolving)
 python3 ${CLAUDE_SKILL_DIR}/display/send.py --player "Max of Thraxx" << 'DNDEND'
 Max of Thraxx draws her dagger and moves toward the gate.
 DNDEND
 
-# 2. Dice result
-python3 ${CLAUDE_SKILL_DIR}/display/send.py --dice << 'DNDEND'
-Max of Thraxx — Stealth: d20+7 = 21 → Clean.
-DNDEND
+# 2. The beat's roll — capture-echo-pipe (§1)
+OUT=$(python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py d20+7 --label "Stealth")
+echo "$OUT"
+{ echo "Max of Thraxx - Stealth:"; echo "$OUT"; } \
+  | python3 ${CLAUDE_SKILL_DIR}/display/send.py --dice
 
-# 3. DM narration + stat changes bundled
+# 3. The beat's narration + its stat changes
 python3 ${CLAUDE_SKILL_DIR}/display/send.py --stat-hp "Max of Thraxx:14:18" << 'DNDEND'
 The gate swings inward on silence. Beyond: cold stone, darkness, the mineral smell of something very old.
 DNDEND
@@ -379,22 +405,33 @@ python3 ${CLAUDE_SKILL_DIR}/display/send.py --npc "Innkeeper" << 'DNDEND'
 DNDEND
 ```
 
-**Block order:** `--player` → `--dice` → plain narration (with `--stat-*` flags) → `--npc` → `--tutor` (if tutor mode active)
+**Block order within a beat:** `--player` → `--dice` → plain narration (with `--stat-*` flags) → `--npc` → `--tutor` (if tutor mode active)
 
-**Per-turn combat sequence (follow exactly):**
+**Per-turn combat sequence (follow exactly — full law in SKILL-wiring.md):**
 ```
-a. send.py --player  ← player action (or describe NPC intent inline)
-b. Roll all dice (combat.py attack / dice.py)
-c. send.py --dice    ← ALL roll results with context
-d. tracker.py        ← conditions, concentration, death saves if applicable
-   tracker.py effect tick <actor>  ← decrement round effects; prints any expiry warnings
-e. Write full narration for this turn
-f. send.py [--stat-*] ← send complete narration + ALL stat changes — NEVER skip
-   Use --effect-start / --effect-end flags when effects begin or end this turn (syncs display)
-g. push_stats.py --turn-current  ← advance turn pointer (still separate — not a narration)
+a. check_input.py                ← drain queued player input, every turn, every mode
+                                   including solo roll_mode: auto  [§2]
+b. move.py --begin-turn          ← reset the actor's movement + reaction (zero-cost
+                                   self-move idiom, §2), then compose and SEND the
+                                   numbered TACTICAL FRAME from map.json — round/turn,
+                                   every combatant's position + key distances, zones.
+                                   A turn without a frame is a defect (§2-a).
+c. Resolve the actor's action:
+   • PC actor: surface applicable abilities BEFORE any roll (§5-a);
+     obey roll_mode and oa_consent (§5-b) — never decide for a PC (§5)
+   • every roll → capture-echo-pipe chip in the same Bash call (§1, §4)
+   • every position change → move.py --write; provoking moves per §2
+     (dry-run first when oa_consent: ask)
+d. tracker.py                    ← conditions, concentration, death saves AS they change
+   tracker.py effect tick <actor> ← on expiry: --effect-end push + map.json zone
+                                   removal in the SAME beat (§3, §8-c)
+e. Narrate in BEATS — send each beat as it is written; that beat's stat/effect
+   flags ride its send (§4). Never compose the whole turn first.
+f. Ledger sweep: anything that changed owner-state this turn is already pushed —
+   PCs and NPCs alike (§8-b). If a change has no push yet, push it now.
+g. push_stats.py --turn-current  ← advance turn pointer (no narration to bundle)
 ```
-Step (f) is the most commonly missed. Every narration block must be sent.
-Step (g) uses `push_stats.py --turn-current` directly because it has no narration to bundle with.
+Step (b) is the new most-commonly-missed step — the frame opens every turn.
 `tracker.py effect tick` is the headless fallback — it fires regardless of whether the display is running.
 
 ---
@@ -509,4 +546,4 @@ The tutor block always goes **last** in the Bash send sequence.
 
 **Scripting and rolls:** Run scripts, rolls, and simple expansions immediately — no confirmation prompts. Only pause for genuinely consequential operations (e.g. deleting campaign data).
 
-**Reference modules:** For full script syntax, Read `${CLAUDE_SKILL_DIR}/SKILL-scripts.md`. For full command procedures, Read `${CLAUDE_SKILL_DIR}/SKILL-commands.md`. Load both at `/dm:dnd load`.
+**Reference modules:** For full script syntax, Read `${CLAUDE_SKILL_DIR}/SKILL-scripts.md`. For full command procedures, Read `${CLAUDE_SKILL_DIR}/SKILL-commands.md`. For table law — the dice pipe, tactical frame, zones, send discipline, player agency, narration register, traversal pacing, and the ledger — Read `${CLAUDE_SKILL_DIR}/SKILL-wiring.md`. **Load all three at `/dm:dnd load`.**
