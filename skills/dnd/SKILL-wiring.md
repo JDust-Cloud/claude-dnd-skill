@@ -152,7 +152,7 @@ anything not in the SRD). The combat blob still owns HP/AC/initiative;
    2. Ren       @ (5,9) - nearest threat Kobold 4, 15 ft - Darkness edge 10 ft NE
    3. Kobold 2  @ (8,4) - engaged with Grosh
    4. Kobold 4  @ (5,12) - 15 ft from Ren, in Darkness
-   ZONES: Darkness - center (9,7), r 15 ft - Aessa conc, 7 rounds left
+   ZONES: Darkness - center (9,7), r 15 ft - Aessa conc, ~8 min left
    ```
    (ASCII by §1's sweep note — prettify only after defect #3's fix lands.)
 
@@ -208,8 +208,10 @@ Moonbeam — gets **both** of these at cast time, in the same beat:
    concentration — plus the display push bundled with that beat's send:
 
    ```bash
-   python3 ${CLAUDE_SKILL_DIR}/scripts/tracker.py -c $CAMP effect start "Aessa" "Darkness" 10r conc
-   # …and on the beat's narration send:  --effect-start "Aessa:Darkness:10r:conc"
+   python3 ${CLAUDE_SKILL_DIR}/scripts/tracker.py -c $CAMP effect start "Aessa" "Darkness" 10m conc
+   # …and on the beat's narration send:  --effect-start "Aessa:Darkness:10m:conc"
+   # (real durations: Darkness is conc. up to 10 MINUTES; use Nr only for
+   #  genuinely round-denominated effects, e.g. Moonbeam 1 min = 10r in combat)
    ```
 
 **One owner per fact:** map.json owns WHERE, tracker.json owns HOW LONG and
@@ -286,8 +288,8 @@ the question goes to the display and the wait loop carries the answer back.
 
 **Pre-roll surfacing (§5-a).** Before resolving any roll, save, or check that
 a PC could legally alter, offer the applicable option in one compact
-table-channel line — *"Ren - Pass Without Trace would cover this approach
-(1 ki, 10 min). Use it?"* This includes reactions (Shield, opportunity
+table-channel line — *"Ren - Shadow Arts: Pass Without Trace would cover
+this approach (2 ki, concentration, up to 1 hour). Use it?"* This includes reactions (Shield, opportunity
 attacks), features and spells, advantage sources, Inspiration — and
 **explicitly the hand-transcribed non-core traits** on the sheet: consult the
 PC's features list before any group check or defining-moment roll. Live
