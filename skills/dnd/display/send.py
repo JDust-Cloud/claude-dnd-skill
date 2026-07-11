@@ -63,6 +63,14 @@ import ssl
 import time
 import urllib.request
 
+# Defect #3 class fix: force UTF-8 on ALL stdio, stdin included. A bare
+# sys.stdin.read() under Windows' cp1252 default silently decodes piped UTF-8
+# em-dashes into three-glyph mojibake, which then persists into text_log and
+# session tails. Mirrors scripts/_stdio.py (display/ has no cross-dir import).
+for _stream in (sys.stdin, sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 _DISPLAY_DIR = os.path.dirname(os.path.abspath(__file__))
 if _DISPLAY_DIR not in sys.path:
     sys.path.insert(0, _DISPLAY_DIR)

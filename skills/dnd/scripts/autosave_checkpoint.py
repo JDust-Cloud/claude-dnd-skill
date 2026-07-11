@@ -37,6 +37,7 @@ import argparse
 import shutil
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _stdio  # noqa: E402,F401 — UTF-8 stdin/stdout/stderr (defect #3 class)
 import paths  # noqa: E402
 
 DEFAULT_EVERY_N = 10          # cadence checkpoint every N turns
