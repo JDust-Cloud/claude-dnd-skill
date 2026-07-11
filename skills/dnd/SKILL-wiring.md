@@ -381,23 +381,29 @@ beat; prose never carries a balance.**
 | Token positions | `map.json` (`move.py` only) | tactical frame; Foundry (Stage 3+) |
 | Conditions, concentration, timed effects, death saves | `tracker.json` (`tracker.py` only) | `--stat-condition-*`, `--stat-concentrate`, `--effect-*` |
 | HP in combat | combat blob (`combat.py` / DM) | `--stat-hp`; character file at save |
-| Spendable pools — ki, rage uses, spell slots, hit dice, Second Wind | the character file's `## Resources` block — one structured line per pool (`Ki: 2/3`) | `--stat-slot-*`, `push_stats.py` partial flags |
+| Spendable pools — ki, rage uses, spell slots, hit dice, Second Wind | `state.md → ## Party` — one structured pool line per PC; the LIVE ledger | `--stat-slot-*`, `push_stats.py` partial flags; each sheet's `## Resources` rewritten at save (§8-e) |
 | XP | `xp.py` (writes the character file) | `xp.py`'s own push + `--xp-award` block |
 | World clock | `calendar.py` | `--world-time` |
 
 **The spend flow** (any pool, every time): player consents (§5) → edit the
-`## Resources` line → same-beat display push → narrate. Three moves, one beat.
+PC's pool line in `state.md → ## Party` → same-beat display push → narrate.
+Three moves, one beat.
 
-**Bootstrapping:** if a character file has no `## Resources` block yet, create
-it at session load — one line per pool (`Ki: 2/3`, `Rage: 1/3`, `Hit Dice:
-3/3 (d8)`), moving each current value IN and deleting every prose copy it
-replaces (§8-a). The block exists from that load onward; the sheets stop
-being novels about resources and start being ledgers.
+**Bootstrapping:** if `state.md → ## Party` lacks a structured pool line for a
+PC, create it at session load — values only, one line per PC (`Ren: Ki 2/3 ·
+Rage 0/3 · HD 3/3 (d8)`), seeded from that sheet's `## Resources` block (build
+THAT first from sheet prose if it's missing, §8-a, then treat the sheet as
+read-only until save). No parenthetical history in the block — ~~"(rested to
+full, then spent 1)"~~ is prose smuggling a story into a ledger. From that
+load onward the party block is the live ledger; sheets are not edited during
+play (HP in combat still lives in the combat blob per the table above).
 
 **Prose copies are banned (§8-a).** No current-value or active-state claim
 exists anywhere except the home and its pushes. A sheet's feature text
 describes RULES (*"costs 1 ki"*), never balances (~~"2/3 remaining"~~).
-`state.md` summarizes the flags it owns, never pool values. Narration may
+`state.md → ## Party` is the pool ledger (the table above); OUTSIDE that
+block, state.md never carries a pool value or balance — recent-events prose,
+NPC notes, and flags stay number-free. Narration may
 gesture (*"winded, down to her last tricks"*), never number.
 
 **NPCs are tracked entities too (§8-b).** Any state change on an NPC the
@@ -425,10 +431,16 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/session_recap.py diff --campaign $CAMP --no-
 python3 ${CLAUDE_SKILL_DIR}/scripts/tracker.py -c $CAMP status
 ```
 
-Read every sheet's `## Resources` and effect state against those two outputs;
-fix mismatches BEFORE writing the save; the save confirmation states either
-**"drift check: clean"** or lists what was corrected. All four sheets rotted
-last session because nothing forced this look.
+**Sheets are save-time projections.** At save, in order: (1) rewrite the
+`state.md → ## Party` block whole from combat close and the tracker (HP
+included); (2) rewrite each sheet's `## Resources` FROM the party block; (3)
+run the two commands above and read every sheet's `## Resources` and effect
+state against their outputs; fix mismatches BEFORE writing the save. The save
+confirmation states either **"drift check: clean"** or lists what was
+corrected. All four sheets rotted at the first measured session's close-out
+because nothing forced this look; the party block sat a full fight stale at
+the session-2 probe because it wasn't yet the owner. One ledger, projected
+twice, checked once.
 
 *Kills: defects #17 (ki triplicated and diverged; four stale sheets at
 close-out), #7 (Scritch's frozen sidebar), #13 (immortal effect chips),
