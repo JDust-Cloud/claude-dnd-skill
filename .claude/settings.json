@@ -8,7 +8,10 @@
       "Bash(python3 *send.py*)",
       "Bash(python3 *push_stats.py*)",
       "Bash(python3 *check_input.py*)",
-      "Bash(python3 *autorun_wait.py*)"
+      "Bash(python3 *autorun_wait.py*)",
+      "Bash(python3 *move.py*)",
+      "Bash(python3 *xp.py*)",
+      "Bash(python3 *session_recap.py*)"
     ]
   }
 }
