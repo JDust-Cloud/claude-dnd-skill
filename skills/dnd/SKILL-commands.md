@@ -341,6 +341,12 @@ On confirmation:
    - Write `source-index.md` — a table mapping `chapter-id → source/<id>.md → one-line scope`, plus source title and import date.
    - Validate the layout: `python3 ${CLAUDE_SKILL_DIR}/scripts/corpus_check.py --campaign <name>` (expects "lazy-corpus layout OK"). Fix any orphan/missing-file warnings before finishing.
 
+6c. Write the **campaign monster supplement** (#27) — `campaigns/<name>/supplement.json`:
+   - Sweep the source for every monster its encounters call for; check each against the SRD (`lookup.py monster "<name>"`). For every one that DOESN'T resolve (non-SRD — Goblin Boss shape), write its restated stat block from the source into `supplement.json` under `"monsters"`, in the SAME record shape as `dnd5e_srd.json` monsters (name, cr, xp, size, type, alignment, ac, hp, hp_dice, speed, str…cha, skills, saves, senses, languages, and a `description` whose Action lines use the SRD prose form — `Action — X: Melee Weapon Attack: +N to hit, reach 5 ft., one target. Hit: N (NdM+K) type damage.` — so move.py's OA parser reads them too).
+   - **Completeness is law:** every rider, second-attack condition, and trait rides the block (the omitted disadvantage rider on the boss's second scimitar KO'd a PC — #38). If the source restatement lacks a full stat block for a called-for monster, that is a CONTENT defect — flag it, don't improvise the block silently.
+   - This file lives under DND_CAMPAIGN_ROOT and NEVER enters the repo (AGPL + book-text law). During play `lookup.py … --campaign <name>` resolves it, campaign entry winning over any same-named SRD record.
+   - Verify before declaring import done: every encounter monster in arc.md resolves via `lookup.py monster "<name>" --campaign <name>`.
+
 7. Write **session-log.md** with Session 0 import record:
    ```
    ## Session 0 — Import — <date>

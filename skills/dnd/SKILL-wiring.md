@@ -47,12 +47,11 @@ echo "$OUT"     # ← you read the result HERE, from the same variable you send
   | python3 ${CLAUDE_SKILL_DIR}/display/send.py --dice
 ```
 
-> ⚠ **ASCII until the sweep:** defect #3 (em-dash → `â€"` on the send→render
-> path) is open until the next build session's encoding sweep. Until it
-> lands, every display-bound string you COMPOSE (headers, frames, offers,
-> corrections) uses ASCII punctuation only — hyphens and `->`, no em-dashes,
-> no box glyphs. Script output is sent verbatim either way (§1-a); if a
-> script's own line mojibakes, that is defect #3's scope, not yours to edit.
+> **ASCII rule RETIRED (2026-07-12):** defect #3 was killed at the root by
+> `c2e50f0` (stdin forced to UTF-8 across the pipe, verified byte-level under
+> cp1252) and the fix is synced. Composed display strings may use full
+> punctuation again. If mojibake EVER reappears on any surface, that is a new
+> defect line citing #3 — log it, don't work around it.
 
 - The header line carries name / skill / in-fiction context. It **may not
   contain roll digits** — no restated totals, no "= 17". A DC may appear only
@@ -70,6 +69,28 @@ OUT=$(python3 ${CLAUDE_SKILL_DIR}/scripts/combat.py attack --atk 4 --ac 15 --dmg
 echo "$OUT"
 { echo "Kobold 3 -> Ren:"; echo "$OUT"; } \
   | python3 ${CLAUDE_SKILL_DIR}/display/send.py --dice
+```
+
+**Attack modifiers are flags, not workarounds (§1-c).** The pipe expresses
+every common attack state directly — two attack calls picking the higher, or
+hand-summed buff dice, are §1 defects now that the flags exist:
+
+```bash
+# advantage / disadvantage (both d20s ride the chip; adv+dis cancel to straight)
+python3 ${CLAUDE_SKILL_DIR}/scripts/combat.py attack --atk 4 --ac 15 --dmg 1d6+2 --adv
+# forced crit — unconscious target within 5 ft (nat-20 doubling is automatic;
+# --crit covers the crits the die doesn't show; nat-1 still auto-misses)
+python3 ${CLAUDE_SKILL_DIR}/scripts/combat.py attack --atk 4 --ac 10 --dmg 1d6+2 --crit
+# compound damage — sneak attack, smite riders (crit doubles every dice group)
+python3 ${CLAUDE_SKILL_DIR}/scripts/combat.py attack --atk 6 --ac 14 --dmg 1d8+2d6+3
+```
+
+**Buffed checks and saves** — Bless/Bane/Guidance ride ONE `dice.py` call
+(compound notation, `adv`/`dis` applies to the first die):
+
+```bash
+OUT=$(python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py "d20+5+1d4" --label "Ren - WIS save (Bless)")
+OUT=$(python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py "d20+3-1d4 adv" --label "Kobold - save (Bane)")
 ```
 
 **Hidden rolls** — `--silent` returns the bare integer; you adjudicate from the
@@ -156,8 +177,6 @@ move.py pipe instead of by hand). The combat blob still owns HP/AC/initiative;
    4. Kobold 4  @ (5,12) - 15 ft from Ren, in Darkness
    ZONES: Darkness - center (9,7), r 15 ft - Aessa conc, ~8 min left
    ```
-   (ASCII by §1's sweep note — prettify only after defect #3's fix lands.)
-
    Distances are squares × 5 ft (Chebyshev). When a distance is
    load-bearing — an OA window, a spell range, a zone edge — compute it with
    the §3 one-liner; never eyeball a number a decision hangs on.
@@ -205,6 +224,28 @@ alive/dead state, so a dead token left in place still fires opportunity
 attacks (found live: a 0-HP baaz took an OA at the sdq-test fight). This
 manual guard stands until move.py grows its per-token OA-suppression flag
 (build list).
+
+**The advantage checklist (§2-d).** Before EVERY attack roll resolves, walk
+the sources — then say which fired in the chip header. The pbtso road and H2
+ambushes both straight-rolled while the narration explicitly established
+unseen shooters; a chapter built of ambushes was under-powered by exactly one
+die (#33).
+
+- **Advantage:** attacker unseen/hidden from the target (every ambush
+  volley); target restrained, stunned, blinded to the attacker, or prone
+  within 5 ft; Pack Tactics with an ally adjacent to the target (already the
+  habit); helped (Help action); target paralyzed or unconscious — within
+  5 ft those two are ALSO `--crit` on a hit.
+- **Disadvantage:** attacker can't see the target; target prone at range
+  (beyond 5 ft); attacker restrained, poisoned, prone, or frightened of
+  something in line of sight; long range; ranged attack with an enemy
+  adjacent to the attacker.
+- **Any adv + any dis = CANCEL — straight roll** (5e RAW: one of each cancels
+  regardless of counts; #38's rider reasoning). The flags do this themselves
+  when both are passed.
+
+Mechanically: `combat.py attack --adv|--dis` (§1-c) — never two calls picking
+the better result.
 
 *Kills: defect #15 (six-enemy fight, zero spatial frame); step 1 kills #5
 (staged input never consumed in solo auto); §2-c kills sdq-test defect #19
@@ -283,8 +324,19 @@ consequence, an exchange of dialogue, 1–3 short paragraphs of scene.
 - Autorun unchanged: when active, the wait is still the last call of the
   response — beats first, wait last.
 
-*Kills: defect #4 (Thora's turn delivered twice) and the dead-air class the
-Stage-1 stopwatch measured.*
+**No display ≠ no beats (§4-b).** When no display is attached, the chat/
+terminal IS the table channel and this whole section still applies to it: the
+turn is DELIVERED in beats — frame, then each roll's chip as it lands, then
+narration — printed as they resolve, never compressed into one end-of-run
+composition ("I did not see any of this actually play out" is the defect
+shape, #30). Bookkeeping (tracker calls, file edits, ledger sweeps) lands
+AFTER the beat it belongs to: the table hears the sword hit before the
+paperwork about it. Spotted-and-avoided still gets its beat — a trap noticed
+is a beat, not a line item in "the journey was uneventful."
+
+*Kills: defect #4 (Thora's turn delivered twice), the dead-air class the
+Stage-1 stopwatch measured, and #30 (whole playtest run compressed into one
+composition when no display was attached).*
 
 ---
 
@@ -370,12 +422,17 @@ Need to convey a mechanic mid-dialogue? Drop to a table-channel line, then
 return to fiction. **Test (§6-a): read the character's line aloud — if it
 teaches the listener a rule, it's a defect.**
 
-**The wall also holds at load (§6-b).** Recaps, scene-sets, and any
-player-facing prose speak only facts the players have learned in play.
-Fields marked `(secret)` / DM-only in npcs-full.md, world.md, or the arc
-never surface in fiction until revealed at the table — the sdq-test
-session-0 recap narrating a betrayal no PC had discovered is the defect
-shape this kills.
+**The wall also holds at load — and on every piped surface (§6-b).**
+PLAYER-FACING means: recaps, scene-sets, **tactical frames (§2)**, traversal
+frames, chip headers, and EVERY block `send.py` pipes to the display — plus
+their terminal equivalents under §4-b. All of them speak only facts the
+players have learned in play. Fields marked `(secret)` / DM-only in
+npcs-full.md, world.md, or the arc never surface there until revealed at the
+table — and **module source prose never rides a frame**: the pbtso H1 frame
+printed a Development note ("H2 lookouts are supposed to be watching this
+spot") verbatim onto what becomes a display surface in the live game (#32).
+Harmless solo, a spoiler at the table. The sdq-test session-0 recap narrating
+an undiscovered betrayal is the same defect shape.
 
 *Kills: defect #10 (Thora naming death saves and "Preserve Life" as mechanics
 in speech).*
@@ -531,6 +588,27 @@ time, never at the table.
 | 20 | DM piloted an undesignated PC (moves, attacks, Second Wind) | §5-c + §2 step 4 gate |
 | 21 | DM answered its own `oa_consent: ask` question | §5-b + §2 ask-bullet sentence |
 | 22 | PC tokens outside the move.py OA pipe | §2 map-creation override rule |
+
+## Appendix 3 — Defect → Rule/Fix map (2026-07-11 pbtso-test ch.1 playtest — ledger canon: campaigns/pbtso-test/defects.md, FINAL at 38)
+
+| # | Defect (short name) | Killed by |
+|---|---|---|
+| 23 | Damage line printed `[6] + mod = 8 d6dmg` unsubstituted | combat.py format_attack fix (2026-07-12 build) |
+| 24 | Dataset monsters carry no skills/saves (Stealth +6 unrecoverable) | build_srd.py + dataset rebuild: skills/saves/senses/resist fields (2026-07-12 build) |
+| 25 | Road ambush has no surprise spec (DM house-ruled) | content lane — modules hub revision checklist |
+| 26 | Bludgeoning-only capture rule too narrow | content lane — modules hub |
+| 27 | `goblin boss` missing — non-SRD monsters can't enter the repo | lookup.py campaign supplement (campaign entry wins) + import populates supplement.json (2026-07-12 build) |
+| 28 | `combat.py init` discards caller max_hp (wrongly kills wounded PCs) | init setdefault + wounded-PC regression test (2026-07-12 build) |
+| 29 | `tracker.py concentrate` orphans superseded/broken conc chips | tracker auto-close in every break path (2026-07-12 build) |
+| 30 | §4 beats silently stop applying with no display | §4-b terminal-beats fallback |
+| 31 | `xp.py` awards ADJUSTED XP (75/head for 37-XP goblins) | xp.py award-raw split + `--encounter` as-built difficulty (2026-07-12 build; supersedes the 7/10 adjusted-award ruling) |
+| 32 | H1 frame printed module Development prose player-facing | §6-b names frames + every piped surface |
+| 33 | Unseen-attacker advantage never applied on ambush volleys | §2-d advantage checklist + combat.py `--adv/--dis` |
+| 34 | Cross-reference on the #28 symptom (timing-probe 19-for-24) | evidence under #28 |
+| 35 | `dice.py` can't parse `d20+X+NdY` (Bless inexpressible in §1) | dice.py compound expressions (2026-07-12 build) |
+| 36 | `combat.py attack` has no adv/dis; `--help` crashes | argparse CLI + `--adv/--dis` flags (2026-07-12 build) |
+| 37 | No die-independent forced-crit flag (auto-crit hand-rolled) | `--crit` forces crit on hit (2026-07-12 build) |
+| 38 | Boss rider omitted; adv+dis=cancel mis-derived risk | §2-d cancel rule + content-lane rider completeness check |
 
 **Later (explicitly not now):** `dice.py` chip-header flag; `move.py`
 per-token OA suppression flag (retires §2's reaction-toggle dance — and the

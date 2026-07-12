@@ -17,6 +17,8 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py 4d6kh3        # ability score roll
 python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py d20 adv       # advantage
 python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py d20+3 dis     # disadvantage + modifier
 python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py d20 --silent  # returns integer only
+python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py d20+5+1d4     # compound (#35) — Bless: buff dice in ONE call
+python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py "d20+7-1d4 adv"  # compound + adv (first die); negative group = Bane
 
 # Always pass --label so the phone HUD shows what the roll is for:
 python3 ${CLAUDE_SKILL_DIR}/scripts/dice.py d20+4 --label "Perception check"
@@ -43,6 +45,8 @@ Flags nat 20 (CRITICAL HIT) and nat 1 (FUMBLE) automatically. If output contains
 
 To force-skip the physical roller (e.g. high-volume NPC rolls you don't want to surface): `--auto` flag, or `DND_DICE_PHYSICAL=0 python3 ...`.
 
+**Compound expressions** (`d20+X+NdY`, any mix of dice groups and flat modifiers, `-` groups allowed) always roll locally — the phone server can't express them. `adv`/`dis` on a compound applies to the FIRST dice group only (the d20), per RAW; kh/kl stays single-group (`4d6kh3`). A malformed notation exits 2 with a named error, never a traceback.
+
 ---
 
 ## Ability Scores Script — `scripts/ability-scores.py`
@@ -68,10 +72,18 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/xp.py calc --level 3 --players 2 --monsters 
 python3 ${CLAUDE_SKILL_DIR}/scripts/xp.py award \
   --campaign <name> --characters "Max of Thraxx,Ethros the 19th" --difficulty hard --type combat
 
-# Award after a combat encounter — exact CR calculation (preferred for standard combats):
+# Award after a combat encounter — exact CR calculation (preferred for standard combats).
+# #31 — DMG rule: the award is RAW XP of the DEFEATED ÷ party; the group-size
+# multiplier rates difficulty ONLY and never inflates the award.
 python3 ${CLAUDE_SKILL_DIR}/scripts/xp.py award \
   --campaign <name> --characters "Max of Thraxx,Ethros the 19th" \
   --monsters "goblin:1/4:3,hobgoblin:1:1" --note "Ambush in the alley"
+
+# Partial defeat / reinforcements — pass the fight AS BUILT for the difficulty
+# label (--monsters stays the DEFEATED list that pays out):
+python3 ${CLAUDE_SKILL_DIR}/scripts/xp.py award \
+  --campaign <name> --characters "Max of Thraxx,Ethros the 19th" \
+  --monsters "goblin:1/4:2" --encounter "goblin:1/4:4,goblin boss:1:1"
 
 # Award for a qualifying non-combat encounter:
 python3 ${CLAUDE_SKILL_DIR}/scripts/xp.py award \
@@ -94,14 +106,20 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/xp.py award \
 # Roll initiative and print tracker
 python3 ${CLAUDE_SKILL_DIR}/scripts/combat.py init '<JSON>'
 # JSON: [{"name":"Flerb","dex_mod":0,"hp":12,"ac":16,"type":"pc"}, ...]
+# A combatant entering the fight WOUNDED passes "max_hp" alongside "hp" —
+# init preserves it (#28); omitted max_hp defaults to hp.
 
 # Reprint tracker from saved state
 python3 ${CLAUDE_SKILL_DIR}/scripts/combat.py tracker '<JSON>' <round_num>
 
 # Resolve a single attack
 python3 ${CLAUDE_SKILL_DIR}/scripts/combat.py attack --atk 4 --ac 15 --dmg 2d6+2
+python3 ${CLAUDE_SKILL_DIR}/scripts/combat.py attack --atk 4 --ac 15 --dmg 1d6+2 --adv   # advantage (#36; --dis for disadvantage; both = cancel)
+python3 ${CLAUDE_SKILL_DIR}/scripts/combat.py attack --atk 4 --ac 10 --dmg 1d6+2 --crit  # forced crit on hit (#37) — unconscious/paralyzed within 5 ft
+python3 ${CLAUDE_SKILL_DIR}/scripts/combat.py attack --atk 6 --ac 14 --dmg 1d8+2d6+3     # compound damage — crit doubles every dice group, never the mod
 ```
 `init` outputs `STATE_JSON:` line — store in `state.md` under `## Active Combat` between turns.
+Nat-20 doubling is automatic; `--crit` exists for crits the die doesn't show. Nat-1 always misses. `--help` works on every subcommand.
 
 ---
 
@@ -462,11 +480,20 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/lookup.py condition "poisoned"
 python3 ${CLAUDE_SKILL_DIR}/scripts/lookup.py monster "goblin"
 python3 ${CLAUDE_SKILL_DIR}/scripts/lookup.py monster "dragon" --all   # all fuzzy matches
 
+# Campaign supplement (#27) — during play ALWAYS pass the campaign so its
+# non-SRD stat blocks (written at import into campaigns/<name>/supplement.json)
+# resolve; a campaign entry wins over a same-named SRD record and is tagged
+# [campaign supplement] for table honesty:
+python3 ${CLAUDE_SKILL_DIR}/scripts/lookup.py monster "goblin boss" --campaign <name>
+
 # Programmatic (used by display companion /srd-lookup endpoint):
 from lookup import lookup, lookup_record, lookup_with_level
 lookup("fireball", category="spell")                  # → formatted string
+lookup_record("goblin boss", category="monster", campaign="<name>")  # supplement-aware
 lookup_with_level("sneak attack", category="feature", level=3)  # → level-resolved string
 ```
+
+Monster records carry `skills`, `saves`, `senses` (passive Perception!), and damage/condition resist-immune-vulnerable lists (#24) — read Stealth and passive Perception from the block, never estimate them.
 
 **When to use:** combat (monster stat blocks before using them); spellcasting (range, components, duration, at-higher-levels); conditions (rule text before applying); loot and equipment; NPC generation (monster stat block as mechanical base). The display companion's character sheet modal handles lookups automatically during play — these CLI calls are for DM reference outside the UI.
 
