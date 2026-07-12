@@ -1432,6 +1432,29 @@ def _norm_condition(r: dict) -> dict:
     }
 
 
+def _monster_proficiencies(r: dict) -> tuple[dict, dict]:
+    """Split a 5e-bits `proficiencies` array into (skills, saves) bonus maps
+    (#24 — Stealth +6 was unrecoverable from the compiled dataset).
+    skills → {"Stealth": 6}; saves → {"DEX": 4}."""
+    skills: dict = {}
+    saves:  dict = {}
+    for p in r.get("proficiencies", []) or []:
+        if not isinstance(p, dict):
+            continue
+        prof = p.get("proficiency", {}) or {}
+        idx  = prof.get("index", "") or ""
+        val  = p.get("value")
+        if val is None:
+            continue
+        if idx.startswith("skill-"):
+            name = (prof.get("name", "") or "").replace("Skill: ", "").strip() \
+                   or idx[len("skill-"):].replace("-", " ").title()
+            skills[name] = val
+        elif idx.startswith("saving-throw-"):
+            saves[idx[len("saving-throw-"):].upper()] = val
+    return skills, saves
+
+
 def _norm_monster(r: dict) -> dict:
     ac_list = r.get("armor_class", [])
     ac_val  = (ac_list[0].get("value") if isinstance(ac_list, list) and ac_list
@@ -1448,7 +1471,7 @@ def _norm_monster(r: dict) -> dict:
         parts.append(f"Action — {a.get('name','')}: {a.get('desc','')}")
     for a in r.get("legendary_actions", []):
         parts.append(f"Legendary — {a.get('name','')}: {a.get('desc','')}")
-    return {
+    out = {
         "name":  r.get("name", ""),
         "index": r.get("index", _slugify(r.get("name", ""))),
         "description": "\n\n".join(parts),
@@ -1469,6 +1492,29 @@ def _norm_monster(r: dict) -> dict:
         "alignment": r.get("alignment", ""),
         "languages": r.get("languages", ""),
     }
+    # #24 — carry the adjudication-critical stat-block fields the normaliser
+    # used to drop. Keys appear only when the source block has content, so
+    # records stay lean.
+    skills, saves = _monster_proficiencies(r)
+    if skills:
+        out["skills"] = skills
+    if saves:
+        out["saves"] = saves
+    senses = r.get("senses")
+    if isinstance(senses, dict) and senses:
+        out["senses"] = senses
+    for src_key, out_key in (("damage_vulnerabilities", "vulnerabilities"),
+                             ("damage_resistances",     "resistances"),
+                             ("damage_immunities",      "immunities")):
+        vals = [str(v) for v in (r.get(src_key) or []) if v]
+        if vals:
+            out[out_key] = vals
+    cond_imm = [c.get("name", "") if isinstance(c, dict) else str(c)
+                for c in (r.get("condition_immunities") or [])]
+    cond_imm = [c for c in cond_imm if c]
+    if cond_imm:
+        out["condition_immunities"] = cond_imm
+    return out
 
 
 # ─── FoundryVTT normaliser ────────────────────────────────────────────────────

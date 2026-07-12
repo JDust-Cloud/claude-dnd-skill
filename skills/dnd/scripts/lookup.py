@@ -13,7 +13,12 @@ Usage (CLI):
 Flags:
     --all                   show all fuzzy matches, not just the best
     --json                  dump full raw record as JSON
-    --campaign <name>       resolve ruleset from the campaign's state.md
+    --campaign <name>       resolve ruleset from the campaign's state.md AND search
+                            the campaign's local supplement (#27) —
+                            campaigns/<name>/supplement.json, where import writes
+                            restated non-SRD stat blocks; a campaign entry wins
+                            over a same-named SRD record. Non-SRD blocks NEVER
+                            enter the repo dataset.
     --ruleset 2014|2024     direct ruleset override
 
 Programmatic import (used by app.py):
@@ -149,6 +154,64 @@ def _set_active(ruleset: str) -> None:
         ruleset = "2014"
     _load_ruleset(ruleset)
     _active_ruleset = ruleset
+
+
+# ─── Campaign-local supplement (#27) ─────────────────────────────────────────
+# Non-SRD stat blocks NEVER enter the repo (AGPL + book-text law). They live
+# per campaign at  <DND_CAMPAIGN_ROOT>/campaigns/<name>/supplement.json  —
+# same category→[records] shape as dnd5e_supplemental.json, written at import
+# time from the module's restated stat blocks. A campaign entry WINS over any
+# same-named SRD/supplemental record.
+
+CAMPAIGN_SUPPLEMENT_NAME = "supplement.json"
+
+
+def _load_campaign_supplement(campaign: str) -> dict:
+    """Load a campaign's supplement.json → {category: [records]} (or {}).
+    Records are tagged `_source: campaign` for provenance."""
+    if not campaign or _paths is None:
+        return {}
+    try:
+        path = _paths.find_campaign(campaign) / CAMPAIGN_SUPPLEMENT_NAME
+    except Exception:
+        return {}
+    if not path.exists():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"# lookup.py: could not read {path}: {e}", file=sys.stderr)
+        return {}
+    out: dict = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if k == "_meta" or not isinstance(v, list):
+                continue
+            recs = []
+            for r in v:
+                if isinstance(r, dict) and r.get("name"):
+                    r = dict(r)
+                    r["_source"] = "campaign"
+                    recs.append(r)
+            if recs:
+                out[k] = recs
+    return out
+
+
+def _merge_supplement(records: list, cat_key, supp: dict) -> list:
+    """Campaign records first, shadowing same-named base records (#27:
+    campaign entry wins)."""
+    if not supp:
+        return records
+    if cat_key is None:  # item search spans equipment + magic_items
+        supp_recs = supp.get("equipment", []) + supp.get("magic_items", [])
+    else:
+        supp_recs = supp.get(cat_key, [])
+    if not supp_recs:
+        return records
+    shadowed = {_norm(r.get("name", "")) for r in supp_recs}
+    return supp_recs + [r for r in records if _norm(r.get("name", "")) not in shadowed]
 
 
 # ── Backwards-compat shim — older callers expect _load() and module globals ──
@@ -288,11 +351,25 @@ def _fmt_monster(r: dict) -> str:
     row1 = " | ".join(f"{a:3}" for a in abbr)
     row2 = " | ".join(f"{r.get(k,10):3}({_mod(r.get(k,10)):+d})" for k in keys)
     lines += [row1, row2, ""]
+    # #24 — the fields the dataset used to drop
+    if r.get("saves"):
+        lines.append("Saves: " + ", ".join(f"{k} {v:+d}" for k, v in r["saves"].items()))
+    if r.get("skills"):
+        lines.append("Skills: " + ", ".join(f"{k} {v:+d}" for k, v in r["skills"].items()))
+    if r.get("senses"):
+        lines.append("Senses: " + ", ".join(
+            f"{k.replace('_', ' ')} {v}" for k, v in r["senses"].items()))
+    for key, label in (("vulnerabilities", "Vulnerable"), ("resistances", "Resistances"),
+                       ("immunities", "Immunities"), ("condition_immunities", "Condition immunities")):
+        if r.get(key):
+            lines.append(f"{label}: " + ", ".join(str(v) for v in r[key]))
     if r.get("languages"):
         lines.append(f"Languages: {r['languages']}")
     desc = r.get("description", "")
     if desc:
         lines += ["", desc]
+    if r.get("_source") == "campaign":
+        lines += ["", "[campaign supplement]"]
     return "\n".join(lines)
 
 
@@ -357,11 +434,12 @@ def _fallback_categories(ruleset: str) -> set:
     return set()
 
 
-def _find_in_ruleset(query: str, cat_key, ruleset: str, top_n: int = 1):
+def _find_in_ruleset(query: str, cat_key, ruleset: str, top_n: int = 1, supp: dict = None):
     """Scan the dataset for `ruleset` for matches; if cat_key is given and the
     primary search misses, also scan 2014 when that category is in the
-    ruleset's fallback list."""
-    records = _get_records(cat_key, ruleset=ruleset)
+    ruleset's fallback list. `supp` (campaign supplement, #27) is merged in
+    front of the primary records — a campaign entry wins."""
+    records = _merge_supplement(_get_records(cat_key, ruleset=ruleset), cat_key, supp or {})
     results = _find(query, records, top_n=top_n)
     if results:
         return results, ruleset, False
@@ -376,24 +454,28 @@ def _find_in_ruleset(query: str, cat_key, ruleset: str, top_n: int = 1):
     return [], ruleset, False
 
 
-def lookup_record(query: str, category=None, ruleset=None):
+def lookup_record(query: str, category=None, ruleset=None, campaign=None):
     """Return the best-matching record dict, or None.
 
     `ruleset` overrides the module-level active ruleset if supplied.
+    `campaign` additionally searches that campaign's supplement.json (#27);
+    a campaign entry shadows a same-named SRD record.
     The returned record is annotated with `_cat`, `_ruleset`, and `_fallback`.
     """
     rs = ruleset or _active_ruleset
     _load_ruleset(rs)
     if not _data_by_rs.get(rs):
         return None
+    supp = _load_campaign_supplement(campaign) if campaign else {}
     cat_key = CATEGORY_MAP.get((category or "").lower()) if category else None
-    results, hit_rs, fb = _find_in_ruleset(query, cat_key, rs, top_n=1)
+    results, hit_rs, fb = _find_in_ruleset(query, cat_key, rs, top_n=1, supp=supp)
 
     resolved_cat = cat_key
     if not results and not category:
         # Search every category in the active ruleset
         for ck in ALL_CATEGORIES:
-            results = _find(query, _data_by_rs.get(rs, {}).get(ck, []), top_n=1)
+            records = _merge_supplement(_data_by_rs.get(rs, {}).get(ck, []), ck, supp)
+            results = _find(query, records, top_n=1)
             if results:
                 resolved_cat = ck
                 hit_rs = rs
@@ -425,9 +507,9 @@ def lookup_record(query: str, category=None, ruleset=None):
     return results[0] if results else None
 
 
-def lookup(query: str, category=None, ruleset=None):
+def lookup(query: str, category=None, ruleset=None, campaign=None):
     """Return a formatted string description for the best match, or None."""
-    rec = lookup_record(query, category=category, ruleset=ruleset)
+    rec = lookup_record(query, category=category, ruleset=ruleset, campaign=campaign)
     if not rec:
         return None
     cat = rec.get("_cat") or "spells"
@@ -549,6 +631,9 @@ def main() -> None:
 
     _set_active(ruleset)
 
+    # #27 — a named campaign also brings its local supplement into the search
+    supp = _load_campaign_supplement(campaign_arg) if campaign_arg else {}
+
     if len(args) < 2:
         print(__doc__)
         sys.exit(0)
@@ -566,12 +651,12 @@ def main() -> None:
     # in the active ruleset's _meta.fallback_2014 when the category is given.
     fallback_used = False
     if cat_specified:
-        results, hit_rs, fb = _find_in_ruleset(query, cat_key, ruleset, top_n=top_n)
+        results, hit_rs, fb = _find_in_ruleset(query, cat_key, ruleset, top_n=top_n, supp=supp)
         fallback_used = fb
     else:
         records = []
         for ck in ALL_CATEGORIES:
-            records.extend(_data_by_rs.get(ruleset, {}).get(ck, []))
+            records.extend(_merge_supplement(_data_by_rs.get(ruleset, {}).get(ck, []), ck, supp))
         results = _find(query, records, top_n=top_n)
         hit_rs  = ruleset
         # If nothing in 2024, try 2014 across fallback categories
@@ -590,12 +675,17 @@ def main() -> None:
         if cat_key is not None:
             return cat_key
         for ck in ALL_CATEGORIES:
+            if record in supp.get(ck, []):
+                return ck
             if record in _data_by_rs.get(rs, {}).get(ck, []):
                 return ck
         return "spells"
 
     if not results:
         print(f"No match for '{query}' in {category}.")
+        if not campaign_arg and cat_key == "monsters":
+            print("(campaign supplements — non-SRD stat blocks written at import — "
+                  "are searched only with --campaign <name>)")
         sys.exit(0)
 
     for r in results:
