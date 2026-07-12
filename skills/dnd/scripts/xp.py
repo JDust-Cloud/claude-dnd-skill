@@ -14,9 +14,15 @@ Usage:
     python3 xp.py award --campaign my-campaign --characters "Aldric,Mira" \\
         --difficulty hard --type combat
 
-    # Award after a combat encounter — exact CR calculation:
+    # Award after a combat encounter — exact CR calculation (#31, DMG rule:
+    # award = RAW XP of the defeated ÷ party; the group-size multiplier rates
+    # difficulty ONLY and never inflates the award):
     python3 xp.py award --campaign my-campaign --characters "Aldric,Mira" \\
         --monsters "goblin:1/4:3,hobgoblin:1:1" --note "Ambush in the alley"
+
+    # Partial defeat / reinforcements — rate difficulty on the fight as built:
+    python3 xp.py award --campaign my-campaign --characters "Aldric,Mira" \\
+        --monsters "goblin:1/4:2" --encounter "goblin:1/4:4,goblin boss:1:1"
 
     # Award for a qualifying non-combat encounter:
     python3 xp.py award --campaign my-campaign --characters "Aldric,Mira" \\
@@ -246,20 +252,28 @@ def cmd_calc(args: argparse.Namespace) -> None:
         if not monsters:
             print("No valid monsters parsed.", file=sys.stderr)
             sys.exit(1)
-        raw_xp, mult, adj_xp = _calc_monster_xp(monsters)
-        total_count = sum(c for _, _, c in monsters)
-        per_player  = adj_xp // players
-        diff        = _classify_difficulty(per_player, level)
+        # #31 — DMG rule: the AWARD is raw monster XP split across the party;
+        # the group-size multiplier gauges DIFFICULTY only and never inflates
+        # the award. Difficulty is rated on the encounter AS BUILT
+        # (--encounter), not the defeated list.
+        raw_xp, _, _ = _calc_monster_xp(monsters)
+        per_player   = raw_xp // players
+
+        enc_monsters = _parse_monsters(args.encounter) if getattr(args, "encounter", None) else monsters
+        enc_raw, enc_mult, enc_adj = _calc_monster_xp(enc_monsters)
+        enc_count = sum(c for _, _, c in enc_monsters)
+        diff      = _classify_difficulty(enc_adj // players, level)
+        enc_src   = "--encounter" if getattr(args, "encounter", None) else "defeated list"
 
         print(f"\n  Combat encounter — CR-based calculation")
         for name, cr, count in monsters:
             print(f"    {count}× {name} (CR {cr}): {CR_XP[cr] * count:,} XP")
-        print(f"\n  Raw XP:       {raw_xp:,}")
-        print(f"  Multiplier:   ×{mult}  ({total_count} monsters)")
-        print(f"  Adjusted XP:  {adj_xp:,}")
-        print(f"  Difficulty:   {diff.upper()}  (Level {level} party of {players})")
-        print(f"  Per player:   {per_player:,} XP")
-        print(f"  Total:        {per_player * players:,} XP")
+        print(f"\n  Raw XP (defeated):  {raw_xp:,}")
+        print(f"  Award:              {raw_xp:,} ÷ {players} = {per_player:,} XP per player"
+              f"  (total {per_player * players:,})")
+        print(f"  Difficulty (as built, {enc_src}): {diff.upper()}"
+              f"  — adjusted {enc_adj:,} = {enc_raw:,} × {enc_mult} ({enc_count} monsters),"
+              f" Level {level} party of {players}")
 
     elif args.difficulty:
         per_player = _xp_per_player(args.difficulty, level)
@@ -300,16 +314,26 @@ def cmd_award(args: argparse.Namespace) -> None:
         if not monsters:
             print("No valid monsters parsed.", file=sys.stderr)
             sys.exit(1)
-        raw_xp, mult, adj_xp = _calc_monster_xp(monsters)
-        total_count = sum(c for _, _, c in monsters)
-        per_player  = adj_xp // players
-        diff        = _classify_difficulty(per_player, avg_level)
+        # #31 — award = RAW XP of the defeated ÷ party (DMG rule; the group
+        # multiplier is a difficulty gauge, never part of the award).
+        raw_xp, _, _ = _calc_monster_xp(monsters)
+        total_count  = sum(c for _, _, c in monsters)
+        per_player   = raw_xp // players
 
-        print(f"\n  Combat — CR-based  [{total_count} monsters, ×{mult} multiplier]")
+        # Difficulty is rated on the encounter AS BUILT — pass --encounter
+        # when the fight ended before everything was defeated (or anything
+        # joined late); defaults to the defeated list.
+        enc_monsters = _parse_monsters(args.encounter) if args.encounter else monsters
+        enc_raw, enc_mult, enc_adj = _calc_monster_xp(enc_monsters)
+        diff      = _classify_difficulty(enc_adj // players, avg_level)
+        enc_src   = "--encounter" if args.encounter else "defeated list"
+
+        print(f"\n  Combat — CR-based  [{total_count} defeated]")
         for name, cr, count in monsters:
             print(f"    {count}× {name} (CR {cr}): {CR_XP[cr] * count:,} XP")
-        print(f"  Raw {raw_xp:,} × {mult} = Adjusted {adj_xp:,} | Difficulty: {diff.upper()}")
-        print(f"  Per player: {per_player:,} XP")
+        print(f"  Award: raw {raw_xp:,} ÷ {players} = {per_player:,} XP per player")
+        print(f"  Difficulty (as built, {enc_src}): {diff.upper()}"
+              f" — adjusted {enc_adj:,} = {enc_raw:,} × {enc_mult}")
 
     else:
         if not args.difficulty:
@@ -367,6 +391,10 @@ def main() -> None:
                         help="Encounter type (default: combat)")
     calc_p.add_argument("--monsters",   metavar="LIST",
                         help="name:cr:count,... e.g. 'goblin:1/4:3,orc:1/2:2'")
+    calc_p.add_argument("--encounter",  metavar="LIST",
+                        help="encounter AS BUILT (name:cr:count,...) for the difficulty "
+                             "rating when it differs from --monsters (partial defeat, "
+                             "reinforcements). Default: --monsters")
 
     # ── award ─────────────────────────────────────────────────────────────────
     award_p = sub.add_parser("award", help="Award XP — updates character files and display")
@@ -379,7 +407,11 @@ def main() -> None:
     award_p.add_argument("--type",       choices=["combat", "noncombat"],
                          help="Encounter type (default: combat if --monsters, else noncombat)")
     award_p.add_argument("--monsters",   metavar="LIST",
-                         help="name:cr:count,... for exact CR-based calculation")
+                         help="DEFEATED monsters (name:cr:count,...) — the award is raw "
+                              "XP of these ÷ party (DMG rule)")
+    award_p.add_argument("--encounter",  metavar="LIST",
+                         help="encounter AS BUILT for the difficulty rating when it "
+                              "differs from --monsters. Default: --monsters")
     award_p.add_argument("--note",       metavar="TEXT",
                          help="Brief label for this award (printed only, not stored)")
 
