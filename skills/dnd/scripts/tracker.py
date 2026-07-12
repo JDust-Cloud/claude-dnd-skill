@@ -179,6 +179,26 @@ def _send_announce(msg: str) -> None:
 
 # ─── Commands ────────────────────────────────────────────────────────────────
 
+def _close_conc_effects(ent: dict, entity_name: str, keep_spell: str = "",
+                        reason: str = "superseded") -> list:
+    """Auto-close concentration-flagged effects orphaned by a concentration
+    change (#29). When concentration breaks or moves to a new spell, any
+    conc-flagged effect on this entity that isn't the new spell is dead —
+    the script's own break path must close it, not leave a chip for a manual
+    `effect end`. Returns the closed effect names."""
+    keep = (keep_spell or "").lower()
+    closed = [e["name"] for e in ent.get("effects", [])
+              if e.get("concentration") and e["name"].lower() != keep]
+    if not closed:
+        return []
+    ent["effects"] = [e for e in ent.get("effects", [])
+                      if not (e.get("concentration") and e["name"].lower() != keep)]
+    for name in closed:
+        _send_announce(f"{entity_name} — {name} ends (concentration {reason})")
+        print(f"  - {entity_name}: {name} auto-closed (concentration {reason})")
+    return closed
+
+
 def cmd_effect(campaign: str, action: str, entity_name: str,
                spell: str = "", duration: str = "", is_conc: bool = False) -> None:
     state = _load(campaign)
@@ -205,6 +225,7 @@ def cmd_effect(campaign: str, action: str, entity_name: str,
             ent["concentration"] = spell
             if old and old.lower() != spell.lower():
                 print(f"  {entity_name}: dropped concentration on '{old}'")
+            _close_conc_effects(ent, entity_name, keep_spell=spell)  # #29
             _send_announce(f"{entity_name} — concentrating on {spell}")
 
         rem = _fmt_effect(effect)
@@ -336,6 +357,7 @@ def cmd_concentrate(campaign: str, entity_name: str, spell_or_break: str) -> Non
             print(f"  {entity_name}: concentration on '{old}' broken")
         else:
             print(f"  {entity_name}: was not concentrating")
+        _close_conc_effects(ent, entity_name, reason="broken")  # #29
     else:
         spell = spell_or_break
         old   = ent.get("concentration")
@@ -346,6 +368,7 @@ def cmd_concentrate(campaign: str, entity_name: str, spell_or_break: str) -> Non
         else:
             _send_announce(f"{entity_name} — concentrating on {spell}")
             print(f"  {entity_name}: concentrating on '{spell}'")
+        _close_conc_effects(ent, entity_name, keep_spell=spell)  # #29
 
     _save(campaign, state)
 
