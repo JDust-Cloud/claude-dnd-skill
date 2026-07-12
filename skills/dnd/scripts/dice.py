@@ -20,6 +20,9 @@ Notation supported:
     d20 dis           disadvantage: roll twice, take lower (→ 2d20kl1)
     d20+3 adv         advantage with modifier
     2d6+3             multiple dice + modifier
+    d20+5+1d4         compound (#35): extra dice groups — Bless, sneak attack …
+    d20+7-1d4 adv     compound with adv/dis (applies to the FIRST die) and
+                      negative groups (Bane). Rolled locally, never the phone.
 
 Env vars:
     DND_DICE_PHYSICAL=1   opt in to physical-roll routing (default: 0, local-random).
@@ -66,6 +69,124 @@ def parse_notation(notation: str):
 
 def roll_dice(num_dice, die_size):
     return [random.randint(1, die_size) for _ in range(num_dice)]
+
+
+# --------------------------------------------------------------------------
+# Compound expressions (#35) — d20+5+1d4, 2d6+1d4+3, d20+7-1d4 …
+# The Bless/Bane/sneak-attack shapes: several dice groups and flat modifiers
+# in one expression. kh/kl remains single-group only (use the classic
+# notation for ability rolls).
+# --------------------------------------------------------------------------
+
+_COMPOUND_TOKEN = re.compile(r'([+-]?)(?:(\d*)d(\d+)|(\d+))')
+
+
+def parse_compound(notation: str):
+    """Parse a compound dice expression into ordered tokens.
+
+    Returns a list of ("dice", sign, n, sides) and ("mod", value) tuples in
+    the order written. Raises ValueError when the string isn't fully
+    consumable or contains no dice term.
+    """
+    s = notation.strip().lower().replace(" ", "")
+    if not s:
+        raise ValueError("empty dice notation")
+    tokens = []
+    has_dice = False
+    pos = 0
+    while pos < len(s):
+        m = _COMPOUND_TOKEN.match(s, pos)
+        if not m or m.end() == pos:
+            raise ValueError(f"Cannot parse dice notation: '{notation}'")
+        sign = -1 if m.group(1) == "-" else 1
+        if m.group(3):  # dice term
+            n = int(m.group(2)) if m.group(2) else 1
+            sides = int(m.group(3))
+            if n < 1 or sides < 1:
+                raise ValueError(f"Cannot parse dice notation: '{notation}'")
+            tokens.append(("dice", sign, n, sides))
+            has_dice = True
+        else:           # flat modifier
+            tokens.append(("mod", sign * int(m.group(4))))
+        pos = m.end()
+    if not has_dice:
+        raise ValueError(f"No dice term in notation: '{notation}'")
+    return tokens
+
+
+def roll_compound(tokens, adv=False, dis=False):
+    """Roll parsed compound tokens. Advantage/disadvantage applies to the
+    FIRST dice group (the d20 in d20+X+NdY): that group is rolled twice and
+    the higher/lower sum kept — later groups (Bless dice etc.) roll once,
+    which is 5e RAW. Returns a result dict."""
+    if adv and dis:
+        adv = dis = False  # cancel — straight roll
+    total = 0
+    parts = []           # per-token render fragments, in order
+    first_pair = None    # (kept_rolls, other_rolls) when adv/dis fired
+    first_dice_seen = False
+    first_face = None    # kept face of a leading single d20 (nat flag)
+    for tok in tokens:
+        if tok[0] == "mod":
+            total += tok[1]
+            parts.append(("mod", tok[1]))
+            continue
+        _, sign, n, sides = tok
+        rolls = roll_dice(n, sides)
+        if not first_dice_seen and (adv or dis):
+            other = roll_dice(n, sides)
+            keep_high = adv
+            if (sum(other) > sum(rolls)) == keep_high and sum(other) != sum(rolls):
+                rolls, other = other, rolls
+            first_pair = (rolls, other)
+        if not first_dice_seen and n == 1 and sides == 20:
+            first_face = rolls[0]
+        first_dice_seen = True
+        total += sign * sum(rolls)
+        parts.append(("dice", sign, n, sides, rolls))
+    return {"total": total, "parts": parts, "first_pair": first_pair,
+            "first_face": first_face, "adv": adv, "dis": dis}
+
+
+def _fmt_compound(res) -> str:
+    """Render a compound roll: `Rolls: d20(14) + 5 + 1d4(3) = 22`."""
+    frags = []
+    for p in res["parts"]:
+        if p[0] == "mod":
+            frags.append(f"{'+' if p[1] >= 0 else '-'} {abs(p[1])}")
+            continue
+        _, sign, n, sides, rolls = p
+        spec = f"{'' if n == 1 else n}d{sides}"
+        faces = ",".join(str(r) for r in rolls)
+        frags.append(f"{'+' if sign > 0 else '-'} {spec}({faces})")
+    body = " ".join(frags)
+    if body.startswith("+ "):
+        body = body[2:]
+    flag = ""
+    if res["first_face"] == 20:
+        flag = "  *** CRITICAL HIT (nat 20)! ***"
+    elif res["first_face"] == 1:
+        flag = "  *** FUMBLE (nat 1)! ***"
+    return f"Rolls: {body} = {res['total']}{flag}"
+
+
+def run_compound(notation: str, silent: bool = False) -> int:
+    """Roll a compound expression (with optional adv/dis words), print, return total."""
+    stripped = notation.strip().lower()
+    adv = "adv" in stripped
+    dis = "dis" in stripped
+    stripped = re.sub(r'\s*(adv|dis|advantage|disadvantage)\w*', '', stripped).strip()
+    tokens = parse_compound(stripped)
+    res = roll_compound(tokens, adv=adv, dis=dis)
+    if not silent:
+        if res["first_pair"]:
+            kept, other = res["first_pair"]
+            lbl = "ADV" if res["adv"] else "DIS"
+            k = ",".join(str(r) for r in kept)
+            o = ",".join(str(r) for r in other)
+            print(f"[{lbl}] first die: [{k}] / [{o}] — keeps [{k}]")
+        print(_fmt_compound(res))
+    return res["total"]
 
 
 def format_modifier(mod):
@@ -172,7 +293,12 @@ def _to_server_notation(num_dice: int, die_size: int, mod: int,
 
 def run(notation: str, silent: bool = False, label: str = "",
         force_local: bool = False, player: str = None) -> int:
-    num_dice, die_size, modifier, keep_mode, keep_count, adv, dis = parse_notation(notation)
+    try:
+        num_dice, die_size, modifier, keep_mode, keep_count, adv, dis = parse_notation(notation)
+    except ValueError:
+        # Compound expression (#35): d20+X+NdY and friends. Rolled locally —
+        # the phone-dice server notation can't express multiple groups.
+        return run_compound(notation, silent=silent)
 
     # Physical-roll routing is opt-in. Default behavior is local-random — the
     # original dice.py behavior. The server bridge is only engaged when one of:
@@ -315,10 +441,18 @@ if __name__ == "__main__":
     args = [a for a in argv if a not in ("--silent", "--auto")]
 
     if not args:
-        print("Usage: python3 dice.py <notation>  e.g. d20+5  2d6  4d6kh3  d20 adv")
+        print("Usage: python3 dice.py <notation>  e.g. d20+5  2d6  4d6kh3  d20 adv  d20+5+1d4")
         sys.exit(1)
 
     notation = " ".join(args)
-    result = run(notation, silent=silent, label=label, force_local=auto, player=player)
+    try:
+        result = run(notation, silent=silent, label=label, force_local=auto, player=player)
+    except ValueError as e:
+        # Named failure, not a traceback (#35): the §1 pipe reads stdout/stderr.
+        print(f"dice.py: {e}", file=sys.stderr)
+        print("Supported: d20+5 | 2d6+3 | 4d6kh3 | d20 adv | d20+5+1d4 (compound; "
+              "adv/dis applies to the first die; kh/kl is single-group only)",
+              file=sys.stderr)
+        sys.exit(2)
     if silent:
         print(result)

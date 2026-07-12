@@ -5,13 +5,23 @@ combat.py — D&D 5e combat tracker
 Usage:
     python3 combat.py init <combatants_json>
         Rolls initiative for all combatants and prints turn order.
-        combatants_json: JSON array of {"name": str, "dex_mod": int, "hp": int, "ac": int, "type": "pc"|"npc"}
+        combatants_json: JSON array of {"name": str, "dex_mod": int, "hp": int,
+        "ac": int, "type": "pc"|"npc", "max_hp": int (optional — for combatants
+        entering the fight wounded; defaults to hp)}
 
-    python3 combat.py tracker <state_json>
+    python3 combat.py tracker <state_json> [round]
         Prints the current combat tracker table from a JSON state blob.
 
-    python3 combat.py attack --atk <bonus> --ac <target_ac> --dmg <notation> [--crit]
+    python3 combat.py attack --atk <bonus> --ac <target_ac> --dmg <notation>
+                             [--adv | --dis] [--crit]
+                             [--mastery <property> [--ability-mod N] [--topple-dc N]]
         Resolves a single attack roll and damage.
+        --adv / --dis  roll two d20s, keep higher/lower (both shown; adv+dis cancel)
+        --crit         force a critical on a hit the die didn't crit (e.g. attacking
+                       an unconscious creature within 5 ft). Nat-20 crits fire
+                       automatically; nat-1 still auto-misses.
+        --dmg accepts compound notation: 1d6+2, 2d6+1d4+3 (crit doubles all dice,
+        never the modifier).
 
 Input / Output is JSON-friendly so the DM (Claude) can pipe state between turns.
 
@@ -22,6 +32,7 @@ Example:
 
 from __future__ import annotations  # PEP 604 annotations on Python 3.9
 
+import argparse
 import json
 import random
 import sys
@@ -29,21 +40,62 @@ import re
 
 import _stdio  # noqa: F401 — forces UTF-8 stdout/stderr on import
 
+# Sibling compound-dice parser (defect #35 work item). combat.py is normally
+# run as a script from its own directory, so the plain import resolves; the
+# fallback keeps resolve_attack usable if dice.py is ever absent.
+try:
+    from dice import parse_compound as _parse_compound
+except Exception:  # pragma: no cover — dice.py ships alongside this file
+    _parse_compound = None
+
 
 def roll(n, sides):
     return [random.randint(1, sides) for _ in range(n)]
 
 
 def dice(notation: str) -> tuple[int, list[int]]:
-    """Parse NdS+M notation, return (total, individual_rolls)."""
+    """Parse dice notation, return (total, individual_rolls).
+
+    Accepts simple NdS+M and compound expressions (NdS+MdK+X) via the shared
+    parser in dice.py (#35)."""
+    total, rolls, _ = _roll_damage(notation, crit=False)
+    return total, rolls
+
+
+def _damage_tokens(notation: str):
+    """Parse a damage notation into ordered tokens.
+    Returns [("dice", sign, n, sides) | ("mod", value)], raises ValueError."""
+    if _parse_compound is not None:
+        return _parse_compound(notation)
+    # Fallback: legacy single-group NdS+M
     m = re.match(r'^(\d*)d(\d+)([+-]\d+)?$', notation.strip().lower())
     if not m:
         raise ValueError(f"Bad dice notation: {notation}")
     n = int(m.group(1)) if m.group(1) else 1
-    s = int(m.group(2))
-    mod = int(m.group(3)) if m.group(3) else 0
-    rolls = roll(n, s)
-    return sum(rolls) + mod, rolls
+    tokens = [("dice", 1, n, int(m.group(2)))]
+    if m.group(3):
+        tokens.append(("mod", int(m.group(3))))
+    return tokens
+
+
+def _roll_damage(notation: str, crit: bool = False) -> tuple[int, list[int], int]:
+    """Roll a (possibly compound) damage expression.
+
+    On a crit every dice group is rolled twice (the modifier is never doubled —
+    5e RAW). Returns (total, signed_rolls, flat_mod)."""
+    tokens = _damage_tokens(notation)
+    total = 0
+    rolls: list[int] = []
+    mod = 0
+    for tok in tokens:
+        if tok[0] == "mod":
+            mod += tok[1]
+            continue
+        _, sign, n, sides = tok
+        group = roll(n * 2 if crit else n, sides)
+        rolls += [sign * r for r in group]
+        total += sign * sum(group)
+    return total + mod, rolls, mod
 
 
 def initiative_order(combatants: list[dict]) -> list[dict]:
@@ -71,29 +123,48 @@ def print_tracker(combatants: list[dict], round_num: int = 1):
     print(f"{'='*68}\n")
 
 
-def resolve_attack(atk_bonus: int, target_ac: int, dmg_notation: str, is_crit: bool = False) -> dict:
-    raw = random.randint(1, 20)
+def resolve_attack(atk_bonus: int, target_ac: int, dmg_notation: str,
+                   is_crit: bool = False, advantage: bool = False,
+                   disadvantage: bool = False) -> dict:
+    """Resolve one attack roll + damage.
+
+    is_crit (#37): force a critical on any HIT the die didn't crit — the
+    unconscious-within-5-ft auto-crit and similar. A nat-1 still auto-misses.
+    advantage/disadvantage (#36): roll two d20s, keep higher/lower; both rolls
+    are reported. If both flags are set they cancel (5e RAW — straight roll).
+    """
+    if advantage and disadvantage:
+        advantage = disadvantage = False  # adv + dis = cancel (straight roll)
+
+    # Validate the damage notation BEFORE any die is cast: a typo'd notation
+    # must fail loudly even when the attack goes on to miss — not lie in wait
+    # for the next hit (found by a nat-1 in the Windows test run, 2026-07-12).
+    _damage_tokens(dmg_notation)
+
+    d20s = [random.randint(1, 20)]
+    if advantage or disadvantage:
+        d20s.append(random.randint(1, 20))
+    raw = max(d20s) if advantage else (min(d20s) if disadvantage else d20s[0])
+
     total_atk = raw + atk_bonus
     hit = raw == 20 or (raw != 1 and total_atk >= target_ac)
-    crit = raw == 20
+    crit = hit and (raw == 20 or is_crit)
 
     result = {
         "d20": raw,
+        "d20_rolls": d20s,
+        "mode": "advantage" if advantage else ("disadvantage" if disadvantage else "straight"),
         "attack_bonus": atk_bonus,
         "total": total_atk,
         "target_ac": target_ac,
         "hit": hit,
         "crit": crit,
+        "forced_crit": bool(crit and raw != 20),
         "fumble": raw == 1,
     }
 
     if hit:
-        dmg, rolls = dice(dmg_notation)
-        if crit:
-            # Double the dice rolls on crit
-            extra, extra_rolls = dice(dmg_notation.split("+")[0].split("-")[0])
-            dmg += extra
-            rolls += extra_rolls
+        dmg, rolls, _mod = _roll_damage(dmg_notation, crit=crit)
         result["damage"] = dmg
         result["damage_rolls"] = rolls
         result["damage_notation"] = dmg_notation
@@ -105,17 +176,32 @@ def format_attack(r: dict) -> str:
     lines = []
     flag = ""
     if r["crit"]:
-        flag = " *** CRITICAL HIT! ***"
+        flag = (" *** CRITICAL HIT (forced)! ***" if r.get("forced_crit")
+                else " *** CRITICAL HIT! ***")
     elif r["fumble"]:
         flag = " *** FUMBLE — automatic miss ***"
 
-    atk_str = f"d20({r['d20']}) + {r['attack_bonus']} = {r['total']} vs AC {r['target_ac']}"
+    d20s = r.get("d20_rolls") or [r["d20"]]
+    mode = r.get("mode", "straight")
+    if mode == "advantage" and len(d20s) == 2:
+        die_str = f"ADV d20[{d20s[0]}, {d20s[1]} → {r['d20']}]"
+    elif mode == "disadvantage" and len(d20s) == 2:
+        die_str = f"DIS d20[{d20s[0]}, {d20s[1]} → {r['d20']}]"
+    else:
+        die_str = f"d20({r['d20']})"
+
+    atk_str = f"{die_str} + {r['attack_bonus']} = {r['total']} vs AC {r['target_ac']}"
     outcome = "HIT" if r["hit"] else "MISS"
     lines.append(f"Attack: {atk_str} — {outcome}{flag}")
 
     if r.get("damage") is not None:
-        note = " (crit: doubled dice)" if r["crit"] else ""
-        lines.append(f"Damage: {r['damage_rolls']} + mod = {r['damage']} {r['damage_notation'].split('+')[0].split('-')[0][1:]}dmg{note}")
+        # Damage line substitution (#23): print the ACTUAL modifier value and
+        # the notation — never the literal words "+ mod" or a mangled die name.
+        rolls = r.get("damage_rolls", [])
+        mod = r["damage"] - sum(rolls)
+        mod_str = f" + {mod}" if mod > 0 else (f" - {abs(mod)}" if mod < 0 else "")
+        note = ", crit: doubled dice" if r["crit"] else ""
+        lines.append(f"Damage: {rolls}{mod_str} = {r['damage']} ({r['damage_notation']}{note})")
 
     if r.get("mastery_text"):
         lines.append(f"Mastery: {r['mastery_text']}")
@@ -254,18 +340,63 @@ def list_masteries() -> str:
     return "\n".join(lines)
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(1)
+def _build_parser() -> argparse.ArgumentParser:
+    """Real arg parser (#36) — `--help` prints usage on every subcommand
+    instead of crashing, and missing/malformed args produce a named error."""
+    p = argparse.ArgumentParser(
+        prog="combat.py", description="D&D 5e combat tracker",
+        formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
+    sub = p.add_subparsers(dest="command", metavar="COMMAND")
 
-    cmd = sys.argv[1]
+    init_p = sub.add_parser("init", help="Roll initiative and print the tracker")
+    init_p.add_argument("combatants", metavar="COMBATANTS_JSON",
+                        help='JSON array of {"name","dex_mod","hp","ac","type"[,"max_hp"]}')
 
-    if cmd == "init":
-        combatants = json.loads(sys.argv[2])
-        # Store max_hp
+    tr_p = sub.add_parser("tracker", help="Reprint the tracker from a state blob")
+    tr_p.add_argument("state", metavar="STATE_JSON", help="JSON state blob from init")
+    tr_p.add_argument("round", nargs="?", type=int, default=1, help="round number (default 1)")
+
+    atk_p = sub.add_parser("attack", help="Resolve a single attack roll and damage")
+    atk_p.add_argument("--atk", type=int, required=True, metavar="N", help="attack bonus")
+    atk_p.add_argument("--ac", type=int, required=True, metavar="N", help="target AC")
+    atk_p.add_argument("--dmg", required=True, metavar="NOTATION",
+                       help="damage dice, e.g. 1d6+2 or compound 2d6+1d4+3")
+    atk_p.add_argument("--adv", action="store_true",
+                       help="advantage — roll two d20s, keep higher (both shown)")
+    atk_p.add_argument("--dis", action="store_true",
+                       help="disadvantage — roll two d20s, keep lower (adv+dis cancel)")
+    atk_p.add_argument("--crit", action="store_true",
+                       help="force a critical on a hit the die didn't crit "
+                            "(unconscious within 5 ft, etc.); nat-20 fires automatically")
+    atk_p.add_argument("--mastery", metavar="PROPERTY", help="2024 weapon mastery property")
+    atk_p.add_argument("--ability-mod", type=int, default=0, metavar="N",
+                       help="STR/DEX mod for graze damage / topple DC fallback")
+    atk_p.add_argument("--topple-dc", type=int, default=None, metavar="N",
+                       help="explicit topple save DC")
+
+    sub.add_parser("masteries", help="List 2024 weapon mastery properties")
+
+    mas_p = sub.add_parser("mastery", help="Resolve a mastery property without an attack roll")
+    mas_p.add_argument("property", help="mastery property (cleave, graze, ...)")
+    mas_p.add_argument("--hit", action="store_true", help="the triggering attack hit")
+    mas_p.add_argument("--ability-mod", type=int, default=0, metavar="N")
+    mas_p.add_argument("--topple-dc", type=int, default=None, metavar="N")
+
+    return p
+
+
+def main(argv=None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command == "init":
+        combatants = json.loads(args.combatants)
+        # Store max_hp — PRESERVE a caller-supplied value (#28): a combatant
+        # entering the fight wounded passes hp < max_hp; overwriting it capped
+        # healing at the false max and wrongly lowered the massive-damage
+        # instant-death threshold.
         for c in combatants:
-            c["max_hp"] = c["hp"]
+            c.setdefault("max_hp", c["hp"])
         ordered = initiative_order(combatants)
         print_tracker(ordered)
         print("Initiative rolls:")
@@ -274,52 +405,39 @@ if __name__ == "__main__":
         print()
         print("STATE_JSON:", json.dumps(ordered))
 
-    elif cmd == "tracker":
-        state = json.loads(sys.argv[2])
-        round_num = int(sys.argv[3]) if len(sys.argv) > 3 else 1
-        print_tracker(state, round_num)
+    elif args.command == "tracker":
+        print_tracker(json.loads(args.state), args.round)
 
-    elif cmd == "attack":
-        args = sys.argv[2:]
-        atk = int(args[args.index("--atk") + 1])
-        ac = int(args[args.index("--ac") + 1])
-        dmg = args[args.index("--dmg") + 1]
-        crit = "--crit" in args
-        result = resolve_attack(atk, ac, dmg, crit)
+    elif args.command == "attack":
+        try:
+            result = resolve_attack(args.atk, args.ac, args.dmg, is_crit=args.crit,
+                                    advantage=args.adv, disadvantage=args.dis)
+        except ValueError as e:
+            parser.error(f"--dmg: {e}")
 
         # Optional 2024 weapon mastery
-        if "--mastery" in args:
-            mastery_name = args[args.index("--mastery") + 1]
-            ability_mod = (int(args[args.index("--ability-mod") + 1])
-                           if "--ability-mod" in args else 0)
-            save_dc = (int(args[args.index("--topple-dc") + 1])
-                       if "--topple-dc" in args else None)
-            mastery = apply_mastery(mastery_name, result["hit"],
-                                    ability_mod=ability_mod, save_dc=save_dc)
+        if args.mastery:
+            mastery = apply_mastery(args.mastery, result["hit"],
+                                    ability_mod=args.ability_mod, save_dc=args.topple_dc)
             result["mastery"]      = mastery
             result["mastery_text"] = mastery["text"]
 
         print(format_attack(result))
 
-    elif cmd == "masteries":
+    elif args.command == "masteries":
         print(list_masteries())
 
-    elif cmd == "mastery":
-        # Ad-hoc mastery resolution (no attack roll context)
-        args = sys.argv[2:]
-        if not args:
-            print("Usage: combat.py mastery <property> [--hit] [--ability-mod N] [--topple-dc N]")
-            sys.exit(1)
-        prop = args[0]
-        hit  = "--hit" in args
-        ability_mod = (int(args[args.index("--ability-mod") + 1])
-                       if "--ability-mod" in args else 0)
-        save_dc = (int(args[args.index("--topple-dc") + 1])
-                   if "--topple-dc" in args else None)
-        out = apply_mastery(prop, hit=hit, ability_mod=ability_mod,
-                            save_dc=save_dc)
+    elif args.command == "mastery":
+        out = apply_mastery(args.property, hit=args.hit,
+                            ability_mod=args.ability_mod, save_dc=args.topple_dc)
         print(json.dumps(out, indent=2))
 
     else:
-        print(f"Unknown command: {cmd}")
-        sys.exit(1)
+        parser.print_help()
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
